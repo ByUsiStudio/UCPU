@@ -1,95 +1,144 @@
 #!/usr/bin/env python3
 # cpu.py - Complete CPU Simulator with CIN/PL/ASM Support
-# Enhanced with performance optimizations, JIT compilation,
-# type system, RISC-V support, and improved error handling
-# Version: 2.0
+# Version: 4.3 - Fixed recursion issues
 
-from typing import List, Tuple, Optional, Dict, Set, Any, Union, Callable, TypeAlias, Generic, TypeVar, Protocol
-from dataclasses import dataclass, field
-from enum import Enum, auto
-from collections import defaultdict
-from pathlib import Path
 import sys
 import re
 import time
 import os
 import struct
-import traceback
-import math
-import subprocess
 import json
 import zlib
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
-from rich import box
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.text import Text
-from rich.markdown import Markdown
-from rich.syntax import Syntax
-from rich.layout import Layout
-from rich.live import Live
+import traceback
+from typing import List, Tuple, Optional, Dict, Set, Any, Union, Callable
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from collections import defaultdict
+from pathlib import Path
+import math
+import socket
 
-# ==================== Type System ====================
+# ==================== ANSI Colors ====================
 
-T = TypeVar('T')
-RegisterIndex: TypeAlias = int
-MemoryAddress: TypeAlias = int
-Instruction: TypeAlias = Tuple[str, List[Tuple[str, Any]]]
+class Colors:
+    """ANSI color codes for terminal output"""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    
+    BLACK = '\033[30m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    
+    BG_BLACK = '\033[40m'
+    BG_RED = '\033[41m'
+    BG_GREEN = '\033[42m'
+    BG_YELLOW = '\033[43m'
+    BG_BLUE = '\033[44m'
+    BG_MAGENTA = '\033[45m'
+    BG_CYAN = '\033[46m'
+    BG_WHITE = '\033[47m'
+    
+    @staticmethod
+    def colorize(text: str, color: str, bold: bool = False) -> str:
+        return f"{Colors.BOLD if bold else ''}{color}{text}{Colors.RESET}"
 
-class Result(Generic[T]):
-    """Rust-style Result type for better error handling"""
-    
-    def __init__(self, value: Optional[T] = None, error: Optional[Exception] = None):
-        self._value = value
-        self._error = error
-        self._is_ok = error is None
-    
-    @classmethod
-    def ok(cls, value: T) -> 'Result[T]':
-        return cls(value=value)
-    
-    @classmethod
-    def err(cls, error: Exception) -> 'Result[T]':
-        return cls(error=error)
-    
-    def is_ok(self) -> bool:
-        return self._is_ok
-    
-    def is_err(self) -> bool:
-        return not self._is_ok
-    
-    def unwrap(self) -> T:
-        if self._is_ok:
-            return self._value
-        raise self._error
-    
-    def unwrap_or(self, default: T) -> T:
-        if self._is_ok:
-            return self._value
-        return default
-    
-    def expect(self, msg: str) -> T:
-        if self._is_ok:
-            return self._value
-        raise type(self._error)(f"{msg}: {self._error}")
-    
-    def map(self, func: Callable[[T], T]) -> 'Result[T]':
-        if self._is_ok:
-            return Result.ok(func(self._value))
-        return self
-    
-    def map_err(self, func: Callable[[Exception], Exception]) -> 'Result[T]':
-        if self._is_err:
-            return Result.err(func(self._error))
-        return self
+# ==================== Console ====================
 
-# ==================== Enums ====================
+class Console:
+    def __init__(self):
+        self.width = 80
+        self._color_support = sys.stdout.isatty()
+    
+    def print(self, *args, **kwargs):
+        text = ' '.join(str(arg) for arg in args)
+        if self._color_support:
+            print(text)
+        else:
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            print(ansi_escape.sub('', text))
+    
+    def clear(self):
+        if sys.platform == 'win32':
+            os.system('cls')
+        else:
+            os.system('clear')
+    
+    def rule(self, title: str = ""):
+        if title:
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            clean_title = ansi_escape.sub('', title)
+            padding = max(0, (50 - len(clean_title) - 2) // 2)
+            line = '=' * padding + ' ' + title + ' ' + '=' * padding
+            if len(line) < 50:
+                line = line + '=' * (50 - len(line))
+            print(line)
+        else:
+            print('=' * 50)
+    
+    def clear_line(self):
+        print('\r' + ' ' * 80 + '\r', end='')
+
+class Panel:
+    def __init__(self, content, title="", border_style="", box=None):
+        self.content = content
+        self.title = title
+    
+    def __str__(self):
+        if self.title:
+            return f"┌─ {self.title} ───────────────────────┐\n{self.content}\n└────────────────────────────────────┘"
+        return f"┌────────────────────────────┐\n{self.content}\n└────────────────────────────┘"
+
+class Table:
+    def __init__(self, title="", box=None, border_style=""):
+        self.title = title
+        self.headers = []
+        self.rows = []
+        self.col_widths = []
+    
+    def add_column(self, name, style="", width=0):
+        self.headers.append(name)
+        self.col_widths.append(width if width > 0 else len(name) + 2)
+    
+    def add_row(self, *args):
+        self.rows.append(args)
+        for i, val in enumerate(args):
+            if i < len(self.col_widths):
+                self.col_widths[i] = max(self.col_widths[i], len(str(val)) + 2)
+    
+    def __str__(self):
+        if not self.headers:
+            return ""
+        
+        lines = []
+        if self.title:
+            lines.append(f"  {Colors.colorize(self.title, Colors.CYAN, True)}")
+        
+        header_parts = []
+        for i, h in enumerate(self.headers):
+            header_parts.append(f"{Colors.colorize(h, Colors.BOLD)}".ljust(self.col_widths[i]))
+        lines.append("  " + " │ ".join(header_parts))
+        lines.append("  " + "─┼─".join("─" * w for w in self.col_widths))
+        
+        for row in self.rows:
+            row_parts = []
+            for i, val in enumerate(row):
+                if i < len(self.col_widths):
+                    row_parts.append(str(val).ljust(self.col_widths[i]))
+            lines.append("  " + " │ ".join(row_parts))
+        
+        return "\n".join(lines)
+
+# ==================== Opcode ====================
 
 class Opcode(Enum):
-    """Instruction opcodes as enums"""
-    # Base instructions (0-27)
     MOV = 0
     LOAD = 1
     STORE = 2
@@ -118,8 +167,6 @@ class Opcode(Enum):
     IN = 25
     OUT = 26
     HALT = 27
-    
-    # ARM64 base instructions (28-55)
     ADDS = 28
     SUBS = 29
     ADDC = 30
@@ -147,8 +194,6 @@ class Opcode(Enum):
     WFE = 52
     WFI = 53
     SEV = 54
-    
-    # ARM64 data processing (55-66)
     CSEL = 55
     CSINC = 56
     CSINV = 57
@@ -162,8 +207,6 @@ class Opcode(Enum):
     CLS = 65
     RBIT = 66
     REV = 67
-    
-    # Floating point instructions (68-77)
     FADD = 68
     FSUB = 69
     FMUL = 70
@@ -174,16 +217,12 @@ class Opcode(Enum):
     FNEG = 75
     LDRS = 76
     STRS = 77
-    
-    # SIMD instructions (78-83)
     VADD = 78
     VSUB = 79
     VMUL = 80
     VDIV = 81
     VLD1 = 82
     VST1 = 83
-    
-    # RISC-V instructions (84-111)
     LB = 84
     LH = 85
     LW = 86
@@ -212,40 +251,20 @@ class Opcode(Enum):
     LUI = 109
     AUIPC = 110
 
-class OperandType(Enum):
-    """Operand types"""
-    REGISTER = auto()
-    IMMEDIATE = auto()
-    MEMORY = auto()
-    LABEL = auto()
-    VECTOR = auto()
-    FLOAT = auto()
-    CONDITION = auto()
-    VECTOR_LANE = auto()
-
-class DataDirective(Enum):
-    """Data directives"""
-    DB = auto()
-    DW = auto()
-    DD = auto()
-    DQ = auto()
-
 # ==================== Constants ====================
 
 class Constants:
-    """Constants definition"""
     NUM_REGISTERS: int = 32
     NUM_VECTOR_REGISTERS: int = 32
     INSTR_SIZE: int = 16
     DEFAULT_MEM_SIZE: int = 1024
     MAGIC_NUMBER: bytes = b'CPUSA'
     CROM_MAGIC: bytes = b'CROM'
-    CROM_VERSION: int = 3  # Incremented for new format
+    CROM_VERSION: int = 3
     VERSION: int = 2
     MAX_INSTRUCTIONS: int = 100000
     STACK_RESERVED: int = 128
     
-    # Complete instruction set with ARM64 and RISC-V extensions
     OPCODE_NAMES: Dict[Opcode, str] = {
         Opcode.MOV: 'MOV', Opcode.LOAD: 'LOAD', Opcode.STORE: 'STORE',
         Opcode.ADD: 'ADD', Opcode.SUB: 'SUB', Opcode.MUL: 'MUL',
@@ -302,7 +321,6 @@ class Constants:
     
     OPCODE_NAME_TO_ENUM: Dict[str, Opcode] = {v: k for k, v in OPCODE_NAMES.items()}
     
-    # Argument counts per instruction
     ARG_COUNTS: Dict[Opcode, int] = {
         Opcode.MOV: 2, Opcode.LOAD: 2, Opcode.STORE: 2,
         Opcode.ADD: 2, Opcode.SUB: 2, Opcode.MUL: 2,
@@ -350,23 +368,20 @@ class Constants:
         Opcode.ORI: 3, Opcode.ANDI: 3,
         Opcode.SLLI: 3, Opcode.SRLI: 3,
         Opcode.SRAI: 3,
-        Opcode.BEQ: 2, Opcode.BNE: 2,
-        Opcode.BLT: 2, Opcode.BGE: 2,
-        Opcode.BLTU: 2, Opcode.BGEU: 2,
-        Opcode.JALR: 2, Opcode.JAL: 1,
+        Opcode.BEQ: 3, Opcode.BNE: 3,
+        Opcode.BLT: 3, Opcode.BGE: 3,
+        Opcode.BLTU: 3, Opcode.BGEU: 3,
+        Opcode.JALR: 2, Opcode.JAL: 2,
         Opcode.LUI: 2, Opcode.AUIPC: 2
     }
     
-    # Condition codes
     CONDITIONS: Set[str] = {
         'EQ', 'NE', 'CS', 'CC', 'MI', 'PL', 'VS', 'VC',
         'HI', 'LS', 'GE', 'LT', 'GT', 'LE', 'AL', 'NV'
     }
     
-    # Data directives
     DATA_DIRECTIVES: Set[str] = {'DB', 'DW', 'DD', 'DQ'}
     
-    # PL language keywords
     PL_KEYWORDS: Dict[str, str] = {
         'set': 'MOV', 'load': 'LOAD', 'store': 'STORE',
         'add': 'ADD', 'subtract': 'SUB', 'multiply': 'MUL', 'divide': 'DIV',
@@ -405,7 +420,6 @@ class Constants:
         'vec_add': 'VADD', 'vec_subtract': 'VSUB',
         'vec_multiply': 'VMUL', 'vec_divide': 'VDIV',
         'vec_load': 'VLD1', 'vec_store': 'VST1',
-        # RISC-V keywords
         'load_byte': 'LB', 'load_half': 'LH', 'load_word': 'LW', 'load_double': 'LD',
         'store_byte': 'SB', 'store_half': 'SH', 'store_word': 'SW', 'store_double': 'SD',
         'add_imm': 'ADDI', 'set_less_than_imm': 'SLTI',
@@ -422,84 +436,6 @@ class Constants:
         'jump_and_link': 'JAL',
         'load_upper_imm': 'LUI', 'add_upper_imm_pc': 'AUIPC'
     }
-    
-    OPCODE_TO_PL: Dict[str, str] = {v: k for k, v in PL_KEYWORDS.items()}
-    
-    # CIN keywords
-    CIN_KEYWORDS: Set[str] = {
-        'if', 'else', 'while', 'for', 'do', 'switch', 'case', 'default',
-        'break', 'continue', 'return', 'goto',
-        'int', 'float', 'char', 'bool', 'void', 'string',
-        'function', 'procedure', 'method', 'constructor', 'destructor',
-        'print', 'println', 'input', 'read', 'write',
-        'sin', 'cos', 'tan', 'sqrt', 'pow', 'abs',
-        'strlen', 'strcmp', 'strcpy', 'strcat',
-        'exit', 'system', 'time', 'rand', 'srand'
-    }
-
-# ==================== Type System ====================
-
-class TypeSystem:
-    """Type system for CIN compiler"""
-    
-    def __init__(self):
-        self.types = {
-            'int': 'int32_t',
-            'float': 'float',
-            'double': 'double',
-            'char': 'char',
-            'bool': 'bool',
-            'string': 'std::string',
-            'void': 'void',
-            'byte': 'uint8_t',
-            'word': 'uint16_t',
-            'dword': 'uint32_t',
-            'qword': 'uint64_t'
-        }
-        self.type_sizes = {
-            'int': 4, 'float': 4, 'double': 8,
-            'char': 1, 'bool': 1, 'byte': 1,
-            'word': 2, 'dword': 4, 'qword': 8
-        }
-        self.type_defaults = {
-            'int': 0, 'float': 0.0, 'double': 0.0,
-            'char': '\0', 'bool': False, 'string': '',
-            'byte': 0, 'word': 0, 'dword': 0, 'qword': 0
-        }
-        self._structs: Dict[str, Dict[str, str]] = {}
-        self._arrays: Dict[str, Tuple[str, int]] = {}
-    
-    def get_type(self, name: str) -> str:
-        """Get C++ type name"""
-        return self.types.get(name, 'auto')
-    
-    def get_size(self, name: str) -> int:
-        """Get type size in bytes"""
-        if name in self._structs:
-            return sum(self.type_sizes.get(t, 4) for t in self._structs[name].values())
-        if name in self._arrays:
-            return self.type_sizes.get(self._arrays[name][0], 4) * self._arrays[name][1]
-        return self.type_sizes.get(name, 4)
-    
-    def add_struct(self, name: str, fields: Dict[str, str]) -> None:
-        """Add a struct definition"""
-        self._structs[name] = fields
-    
-    def add_array(self, name: str, elem_type: str, size: int) -> None:
-        """Add an array definition"""
-        self._arrays[name] = (elem_type, size)
-    
-    def is_struct(self, name: str) -> bool:
-        return name in self._structs
-    
-    def is_array(self, name: str) -> bool:
-        return name in self._arrays
-    
-    def get_struct_fields(self, name: str) -> Dict[str, str]:
-        return self._structs.get(name, {})
-    
-    def get_array_info(self, name: str) -> Tuple[str, int]:
-        return self._arrays.get(name, ('int', 0))
 
 # ==================== Exceptions ====================
 
@@ -518,12 +454,6 @@ class AssemblerError(CPUSimulatorError):
         prefix = f"{location}: " if location else ""
         super().__init__(f"{prefix}Assembler error: {line} - {detail}")
 
-class CompileError(CPUSimulatorError):
-    def __init__(self, message: str, detail: Optional[Any] = None, line_num: Optional[int] = None):
-        self.line_num = line_num
-        prefix = f"Line {line_num}: " if line_num else ""
-        super().__init__(f"{prefix}{message}", detail)
-
 class ExecutionError(CPUSimulatorError):
     pass
 
@@ -537,6 +467,7 @@ class Logger:
         self.console = console or Console()
         self.level = self._parse_level(level)
         self.log_file = None
+        self._color_support = sys.stdout.isatty()
     
     def _parse_level(self, level: str) -> int:
         levels = {'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'ERROR': 3, 'CRITICAL': 4}
@@ -545,15 +476,28 @@ class Logger:
     def set_log_file(self, filename: str) -> None:
         self.log_file = open(filename, 'w', encoding='utf-8')
     
+    def _colorize(self, text: str, color: str) -> str:
+        if self._color_support:
+            return f"{color}{text}{Colors.RESET}"
+        return text
+    
     def _log(self, message: str, level: str, color: str) -> None:
         if self._parse_level(level) >= self.level:
             timestamp = time.strftime("%H:%M:%S")
-            formatted = f"[{timestamp}] [{level}] {message}"
+            color_map = {
+                'DEBUG': Colors.BLUE,
+                'INFO': Colors.GREEN,
+                'WARNING': Colors.YELLOW,
+                'ERROR': Colors.RED,
+                'CRITICAL': f"{Colors.RED}{Colors.BOLD}"
+            }
+            colored_level = self._colorize(f"[{level}]", color_map.get(level, Colors.WHITE))
+            formatted = f"[{timestamp}] {colored_level} {message}"
             if self.log_file:
-                self.log_file.write(formatted + "\n")
+                self.log_file.write(f"[{timestamp}] [{level}] {message}\n")
                 self.log_file.flush()
             if self.console:
-                self.console.print(f"[{color}]{formatted}[/{color}]")
+                self.console.print(formatted)
     
     def debug(self, msg: str) -> None:
         self._log(msg, 'DEBUG', 'blue')
@@ -591,16 +535,14 @@ class Config:
     show_vector_regs: bool = True
     show_timings: bool = True
     strict_mode: bool = False
-    compile_only: bool = False
     output_file: Optional[str] = None
-    no_compile: bool = False
     optimize: int = 0
-    target: str = 'native'
     enable_jit: bool = False
     cache_size: int = 64
     cache_assoc: int = 4
     profile: bool = False
-    compress_crom: bool = True  # New: Compress CROM files
+    compress_crom: bool = True
+    compile_to_bin: bool = False
     
     @classmethod
     def from_args(cls, args: List[str]) -> 'Config':
@@ -618,16 +560,14 @@ class Config:
                 config.auto_save_crom = True
             elif arg == '--sandbox':
                 config.sandbox_mode = True
-            elif arg == '--compile-only':
-                config.compile_only = True
-            elif arg == '--no-compile':
-                config.no_compile = True
             elif arg == '--jit':
                 config.enable_jit = True
             elif arg == '--profile':
                 config.profile = True
             elif arg == '--no-compress':
                 config.compress_crom = False
+            elif arg == '--compile':
+                config.compile_to_bin = True
             elif arg == '--output' and i + 1 < len(args):
                 config.output_file = args[i + 1]
                 i += 1
@@ -636,9 +576,6 @@ class Config:
                     config.optimize = int(args[i + 1])
                 except ValueError:
                     pass
-                i += 1
-            elif arg == '--target' and i + 1 < len(args):
-                config.target = args[i + 1]
                 i += 1
             elif arg == '--mem-size' and i + 1 < len(args):
                 try:
@@ -686,7 +623,6 @@ class Config:
 # ==================== Cache System ====================
 
 class CacheLine:
-    """Single cache line"""
     def __init__(self, tag: int = 0, valid: bool = False, dirty: bool = False):
         self.tag = tag
         self.valid = valid
@@ -695,8 +631,6 @@ class CacheLine:
         self.last_used: int = 0
 
 class Cache:
-    """Simple cache system with LRU replacement"""
-    
     def __init__(self, size: int = 64, assoc: int = 4, line_size: int = 16):
         self.size = size
         self.assoc = assoc
@@ -710,53 +644,40 @@ class Cache:
         self.misses = 0
         self.clock = 0
         
-        self.memory = None  # Will be set by CPU
+        self.memory = None
     
     def _init_cache(self) -> None:
-        """Initialize cache sets"""
         for set_idx in range(self.num_sets):
             self.cache[set_idx] = [CacheLine() for _ in range(self.assoc)]
     
     def _get_set_index(self, addr: int) -> int:
-        """Get set index from address"""
         return (addr // self.line_size) % self.num_sets
     
     def _get_tag(self, addr: int) -> int:
-        """Get tag from address"""
         return addr // (self.line_size * self.num_sets)
     
-    def _get_line_offset(self, addr: int) -> int:
-        """Get offset within cache line"""
-        return addr % self.line_size
-    
-    def read(self, addr: int) -> Result[int]:
-        """Read from cache"""
+    def read(self, addr: int) -> int:
         set_idx = self._get_set_index(addr)
         tag = self._get_tag(addr)
-        offset = self._get_line_offset(addr)
         
         cache_set = self.cache[set_idx]
         
-        # Search for tag in set
         for line in cache_set:
             if line.valid and line.tag == tag:
                 self.hits += 1
                 line.last_used = self.clock
                 self.clock += 1
                 if addr in line.data:
-                    return Result.ok(line.data[addr])
-                # Fetch from memory if not in line data
+                    return line.data[addr]
                 if self.memory:
                     base_addr = (addr // self.line_size) * self.line_size
                     for i in range(self.line_size):
                         line.data[base_addr + i] = self.memory.read_byte(base_addr + i)
-                    return Result.ok(line.data[addr])
-                return Result.ok(0)
+                    return line.data[addr]
+                return 0
         
-        # Cache miss
         self.misses += 1
         
-        # Find empty line or evict LRU
         evict_idx = 0
         oldest_time = self.clock
         for i, line in enumerate(cache_set):
@@ -767,14 +688,11 @@ class Cache:
                 oldest_time = line.last_used
                 evict_idx = i
         
-        # Evict line
         evicted = cache_set[evict_idx]
         if evicted.valid and evicted.dirty and self.memory:
-            # Write back dirty data
             for addr_val, data in evicted.data.items():
                 self.memory.write_byte(addr_val, data)
         
-        # Load from memory
         cache_set[evict_idx] = CacheLine(tag=tag, valid=True, dirty=False)
         cache_set[evict_idx].last_used = self.clock
         self.clock += 1
@@ -783,18 +701,16 @@ class Cache:
             base_addr = (addr // self.line_size) * self.line_size
             for i in range(self.line_size):
                 cache_set[evict_idx].data[base_addr + i] = self.memory.read_byte(base_addr + i)
-            return Result.ok(cache_set[evict_idx].data[addr])
+            return cache_set[evict_idx].data[addr]
         
-        return Result.ok(0)
+        return 0
     
-    def write(self, addr: int, value: int) -> Result[None]:
-        """Write to cache (write-back)"""
+    def write(self, addr: int, value: int) -> None:
         set_idx = self._get_set_index(addr)
         tag = self._get_tag(addr)
         
         cache_set = self.cache[set_idx]
         
-        # Search for tag in set
         for line in cache_set:
             if line.valid and line.tag == tag:
                 line.data[addr] = value
@@ -802,12 +718,10 @@ class Cache:
                 line.last_used = self.clock
                 self.clock += 1
                 self.hits += 1
-                return Result.ok(None)
+                return
         
-        # Cache miss - need to allocate
         self.misses += 1
         
-        # Find empty line or evict LRU
         evict_idx = 0
         oldest_time = self.clock
         for i, line in enumerate(cache_set):
@@ -818,22 +732,17 @@ class Cache:
                 oldest_time = line.last_used
                 evict_idx = i
         
-        # Evict line
         evicted = cache_set[evict_idx]
         if evicted.valid and evicted.dirty and self.memory:
             for addr_val, data in evicted.data.items():
                 self.memory.write_byte(addr_val, data)
         
-        # Allocate new line
         cache_set[evict_idx] = CacheLine(tag=tag, valid=True, dirty=True)
         cache_set[evict_idx].data[addr] = value
         cache_set[evict_idx].last_used = self.clock
         self.clock += 1
-        
-        return Result.ok(None)
     
     def flush(self) -> None:
-        """Flush all dirty lines to memory"""
         if not self.memory:
             return
         
@@ -845,12 +754,10 @@ class Cache:
                     line.dirty = False
     
     def warmup(self, instructions: List[Tuple]) -> None:
-        """Preload instructions into cache"""
-        for pc, (opcode, args) in enumerate(instructions):
+        for pc, _ in enumerate(instructions):
             self.read(pc)
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics"""
         total = self.hits + self.misses
         return {
             'hits': self.hits,
@@ -860,11 +767,109 @@ class Cache:
             'total_accesses': total
         }
 
+# ==================== Branch Predictor ====================
+
+class BranchPredictor:
+    def __init__(self):
+        self.saturating_counters: Dict[int, int] = {}
+        self.correct_predictions = 0
+        self.total_predictions = 0
+    
+    def predict(self, pc: int) -> bool:
+        return self.saturating_counters.get(pc, 2) >= 2
+    
+    def update(self, pc: int, taken: bool) -> None:
+        counter = self.saturating_counters.get(pc, 2)
+        if taken:
+            counter = min(3, counter + 1)
+        else:
+            counter = max(0, counter - 1)
+        self.saturating_counters[pc] = counter
+    
+    def record_prediction(self, predicted: bool, actual: bool) -> None:
+        self.total_predictions += 1
+        if predicted == actual:
+            self.correct_predictions += 1
+    
+    def get_accuracy(self) -> float:
+        if self.total_predictions == 0:
+            return 1.0
+        return self.correct_predictions / self.total_predictions
+
+# ==================== Performance Counters ====================
+
+class PerformanceCounters:
+    def __init__(self):
+        self.counters = {
+            'cycles': 0,
+            'instructions': 0,
+            'branches': 0,
+            'branch_mispredictions': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'memory_reads': 0,
+            'memory_writes': 0,
+            'stalls': 0,
+            'flops': 0
+        }
+        self.branch_predictor = BranchPredictor()
+    
+    def record_instruction(self, opcode: str) -> None:
+        self.counters['instructions'] += 1
+        if opcode in ('JMP', 'JZ', 'JNZ', 'JE', 'JL', 'JG', 'B', 'BL', 'BR', 'BEQ', 'BNE', 'BLT', 'BGE'):
+            self.counters['branches'] += 1
+        if opcode in ('FADD', 'FSUB', 'FMUL', 'FDIV', 'VADD', 'VSUB', 'VMUL', 'VDIV'):
+            self.counters['flops'] += 1
+    
+    def record_branch_result(self, pc: int, taken: bool, predicted: bool) -> None:
+        self.branch_predictor.record_prediction(predicted, taken)
+        if taken != predicted:
+            self.counters['branch_mispredictions'] += 1
+        self.branch_predictor.update(pc, taken)
+    
+    def record_cache(self, hit: bool) -> None:
+        if hit:
+            self.counters['cache_hits'] += 1
+        else:
+            self.counters['cache_misses'] += 1
+    
+    def record_memory_read(self) -> None:
+        self.counters['memory_reads'] += 1
+    
+    def record_memory_write(self) -> None:
+        self.counters['memory_writes'] += 1
+    
+    def get_ipc(self) -> float:
+        if self.counters['cycles'] == 0:
+            return 0
+        return self.counters['instructions'] / self.counters['cycles']
+    
+    def get_stats(self) -> Dict[str, Any]:
+        stats = self.counters.copy()
+        stats['ipc'] = self.get_ipc()
+        stats['branch_accuracy'] = self.branch_predictor.get_accuracy()
+        total_cache = stats['cache_hits'] + stats['cache_misses']
+        stats['cache_hit_rate'] = stats['cache_hits'] / total_cache if total_cache > 0 else 0
+        return stats
+    
+    def display(self, console: Console) -> None:
+        stats = self.get_stats()
+        table = Table(title="Performance Counters")
+        table.add_column("Metric")
+        table.add_column("Value")
+        
+        for key, value in stats.items():
+            if key in ('branch_accuracy', 'cache_hit_rate'):
+                table.add_row(key.replace('_', ' ').title(), f"{value*100:.1f}%")
+            elif key == 'ipc':
+                table.add_row("Instructions Per Cycle", f"{value:.2f}")
+            else:
+                table.add_row(key.replace('_', ' ').title(), str(value))
+        console.print(str(table))
+
 # ==================== JIT Compiler ====================
 
 class JITCompiler:
-    """Simple JIT compiler that compiles instruction sequences to Python callables"""
-    
     def __init__(self, cpu: 'CPU'):
         self.cpu = cpu
         self.compiled_blocks: Dict[int, Callable] = {}
@@ -873,14 +878,8 @@ class JITCompiler:
         self.total_calls = 0
         self.cache_hits = 0
         self.hit_rate = 0.0
-        self.instruction_latency: Dict[str, int] = {
-            'ADD': 1, 'SUB': 1, 'MUL': 3, 'DIV': 10,
-            'LOAD': 4, 'STORE': 4, 'FADD': 3, 'FMUL': 5,
-            'FDIV': 10, 'VADD': 2, 'VMUL': 4, 'VDIV': 8
-        }
-        
+    
     def compile_block(self, start_pc: int, end_pc: int) -> Optional[Callable]:
-        """Compile a block of instructions to a Python function"""
         self.total_calls += 1
         
         if start_pc in self.compiled_blocks:
@@ -891,31 +890,31 @@ class JITCompiler:
         if start_pc >= len(self.cpu.instructions) or end_pc > len(self.cpu.instructions):
             return None
         
-        instructions = self.cpu.instructions[start_pc:end_pc]
-        if not instructions:
-            return None
-        
-        # Generate Python source code for the block
-        source_parts = []
-        source_parts.append("def compiled_block(cpu, memory, regs, vec_regs, pstate):")
-        source_parts.append(f"    pc = {start_pc}")
-        
-        # Pre-cache register file reference for faster access
-        source_parts.append("    regs_list = regs._regs")
-        
-        for i, (opcode, args) in enumerate(instructions):
-            pc = start_pc + i
-            source_parts.append(f"    # pc={pc}: {opcode} {args}")
-            
-            # Generate code for each instruction
-            code_line = self._gen_instruction_code(opcode, args, pc)
-            if code_line:
-                source_parts.append(f"    {code_line}")
-        
-        source_parts.append("    return pc")
-        source = "\n".join(source_parts)
-        
         try:
+            instructions = self.cpu.instructions[start_pc:end_pc]
+            if not instructions:
+                return None
+            
+            source_parts = []
+            source_parts.append("def compiled_block(cpu, memory, regs, vec_regs, pstate):")
+            source_parts.append(f"    pc = {start_pc}")
+            source_parts.append("    regs_list = regs._regs")
+            source_parts.append("    try:")
+            
+            for i, (opcode, args) in enumerate(instructions):
+                pc = start_pc + i
+                source_parts.append(f"        # pc={pc}: {opcode} {args}")
+                code_line = self._gen_instruction_code(opcode, args, pc)
+                if code_line:
+                    source_parts.append(f"        {code_line}")
+                else:
+                    return None
+            
+            source_parts.append("    except Exception as e:")
+            source_parts.append("        raise")
+            source_parts.append("    return pc")
+            source = "\n".join(source_parts)
+            
             namespace = {
                 'cpu': self.cpu,
                 'memory': self.cpu.memory,
@@ -923,7 +922,7 @@ class JITCompiler:
                 'vec_regs': self.cpu.vec_regs,
                 'pstate': self.cpu.pstate
             }
-            exec(source, namespace)
+            exec(compile(source, '<JIT>', 'exec'), namespace)
             compiled_func = namespace['compiled_block']
             self.compiled_blocks[start_pc] = compiled_func
             self.block_cache[start_pc] = (start_pc, end_pc)
@@ -933,8 +932,7 @@ class JITCompiler:
             self.cpu.logger.debug(f"JIT compilation failed for block at {start_pc}: {e}")
             return None
     
-    def _gen_instruction_code(self, opcode: str, args: List[Tuple[str, int]], pc: int) -> str:
-        """Generate Python code for a single instruction"""
+    def _gen_instruction_code(self, opcode: str, args: List, pc: int) -> Optional[str]:
         if opcode == 'MOV':
             return self._gen_move(args)
         elif opcode in ('ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR', 'SHL', 'SHR'):
@@ -1111,7 +1109,6 @@ class JITCompiler:
         return f"memory.write_dword({addr}, regs_list[{rs}])"
     
     def _get_val_expr(self, arg: Tuple) -> str:
-        """Get Python expression for value access"""
         if not arg:
             return "0"
         
@@ -1131,7 +1128,6 @@ class JITCompiler:
         return "0"
     
     def invalidate_block(self, pc: int) -> None:
-        """Invalidate compiled block at PC"""
         if pc in self.compiled_blocks:
             del self.compiled_blocks[pc]
         if pc in self.block_cache:
@@ -1147,36 +1143,27 @@ class JITCompiler:
             'hit_rate': self.hit_rate
         }
 
-# ==================== Memory System ====================
+# ==================== Fast Memory ====================
 
-class Memory:
-    def __init__(self, console: Optional[Console] = None, size: int = Constants.DEFAULT_MEM_SIZE):
-        self.console = console or Console()
-        self._size = size
+class FastMemory:
+    def __init__(self, size: int = Constants.DEFAULT_MEM_SIZE):
         self._memory = bytearray(size)
-        self._protection: Dict[int, str] = {}  # addr -> 'r', 'w', 'x'
-        self._watchpoints: Dict[int, Dict[str, int]] = {}
+        self._size = size
+        self._view = memoryview(self._memory)
+        self._protection: Dict[int, str] = {}
         self._cache = None
-        self._page_size = 4096
-        self._pages: Dict[int, bytearray] = {}
     
     def set_cache(self, cache: 'Cache') -> None:
-        """Set cache reference for coherent access"""
         self._cache = cache
         cache.memory = self
     
     def set_protection(self, addr: int, perms: str, size: int = 1) -> None:
-        """Set memory protection for a range"""
         for i in range(size):
             self._protection[addr + i] = perms
     
     def check_access(self, addr: int, access: str) -> bool:
-        """Check if access is allowed"""
         perm = self._protection.get(addr, 'rwx')
         return access in perm
-    
-    def __len__(self) -> int:
-        return self._size
     
     def _check_bounds(self, addr: int, size: int = 1) -> None:
         if not 0 <= addr < self._size:
@@ -1192,21 +1179,17 @@ class Memory:
         self._check_bounds(addr)
         self._check_protection(addr, 'r')
         
-        # Check cache if available
         if self._cache:
-            result = self._cache.read(addr)
-            if result.is_ok():
-                return result.unwrap()
+            return self._cache.read(addr)
         
-        return self._memory[addr]
+        return self._view[addr]
     
     def write_byte(self, addr: int, value: int) -> None:
         self._check_bounds(addr)
         self._check_protection(addr, 'w')
         
-        self._memory[addr] = value & 0xFF
+        self._view[addr] = value & 0xFF
         
-        # Invalidate cache if available
         if self._cache:
             self._cache.write(addr, value & 0xFF)
     
@@ -1221,51 +1204,63 @@ class Memory:
         return (self.read_byte(addr) | (self.read_byte(addr + 1) << 8) |
                 (self.read_byte(addr + 2) << 16) | (self.read_byte(addr + 3) << 24))
     
+    def read_dword_fast(self, addr: int) -> int:
+        if not 0 <= addr < self._size - 3:
+            raise MemoryError(f"Address {addr:#x} out of bounds")
+        return struct.unpack_from('<I', self._view, addr)[0]
+    
     def write_dword(self, addr: int, value: int) -> None:
         self.write_byte(addr, value & 0xFF)
         self.write_byte(addr + 1, (value >> 8) & 0xFF)
         self.write_byte(addr + 2, (value >> 16) & 0xFF)
         self.write_byte(addr + 3, (value >> 24) & 0xFF)
     
+    def write_dword_fast(self, addr: int, value: int) -> None:
+        if not 0 <= addr < self._size - 3:
+            raise MemoryError(f"Address {addr:#x} out of bounds")
+        struct.pack_into('<I', self._view, addr, value & 0xFFFFFFFF)
+    
     def read_float(self, addr: int) -> float:
         self._check_bounds(addr, 4)
-        return struct.unpack('f', self._memory[addr:addr+4])[0]
+        return struct.unpack_from('f', self._view, addr)[0]
     
     def write_float(self, addr: int, value: float) -> None:
         self._check_bounds(addr, 4)
-        self._memory[addr:addr+4] = struct.pack('f', value)
+        struct.pack_into('f', self._view, addr, value)
     
-    def read_unaligned_dword(self, addr: int) -> int:
-        """Read unaligned dword (slower but supports non-4-byte aligned addresses)"""
-        value = 0
-        for i in range(4):
-            value |= self.read_byte(addr + i) << (i * 8)
-        return value
+    def read_block(self, addr: int, size: int) -> bytes:
+        self._check_bounds(addr, size)
+        return bytes(self._view[addr:addr+size])
     
-    def write_unaligned_dword(self, addr: int, value: int) -> None:
-        for i in range(4):
-            self.write_byte(addr + i, (value >> (i * 8)) & 0xFF)
+    def write_block(self, addr: int, data: bytes) -> None:
+        self._check_bounds(addr, len(data))
+        self._view[addr:addr+len(data)] = data
     
-    def display_memory(self, title: str = "Memory Dump", start: int = 0, count: int = 32) -> None:
-        table = Table(title=title, box=box.ROUNDED, border_style="blue")
-        table.add_column("Address", style="cyan", width=10)
-        table.add_column("Hex", style="green", width=50)
-        table.add_column("ASCII", style="yellow")
-        table.add_column("Prot", style="red", width=6)
+    def __len__(self) -> int:
+        return self._size
+    
+    def display_memory(self, title: str = "Memory Dump", start: int = 0, count: int = 32,
+                       console: Optional[Console] = None) -> None:
+        if console is None:
+            return
+        table = Table(title=title)
+        table.add_column("Address")
+        table.add_column("Hex")
+        table.add_column("ASCII")
+        table.add_column("Prot")
         end = min(start + count, self._size)
         for i in range(start, end, 16):
-            chunk = self._memory[i:min(i+16, end)]
+            chunk = self._view[i:min(i+16, end)]
             hex_str = ' '.join(f'{b:02X}' for b in chunk)
             ascii_str = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
             perm = self._protection.get(i, 'rwx')
             table.add_row(f"{i:04X}", hex_str, ascii_str, perm)
-        self.console.print(table)
+        console.print(str(table))
     
     def get_memory_snapshot(self, start: int = 0, count: int = -1) -> bytes:
-        """Get a snapshot of memory as bytes"""
         if count < 0:
             count = self._size - start
-        return bytes(self._memory[start:start+count])
+        return bytes(self._view[start:start+count])
 
 # ==================== Register System ====================
 
@@ -1291,11 +1286,14 @@ class RegisterFile:
     def get_all(self) -> List[int]:
         return self._regs.copy()
     
-    def display_registers(self, title: str = "Registers", extra_info: Optional[Dict[str, Any]] = None) -> None:
-        table = Table(title=title, box=box.ROUNDED, border_style="cyan")
-        table.add_column("Register", style="bold")
-        table.add_column("Value (Dec)", style="green")
-        table.add_column("Value (Hex)", style="yellow")
+    def display_registers(self, title: str = "Registers", extra_info: Optional[Dict[str, Any]] = None,
+                         console: Optional[Console] = None) -> None:
+        if console is None:
+            console = self.console
+        table = Table(title=title)
+        table.add_column("Register")
+        table.add_column("Value (Dec)")
+        table.add_column("Value (Hex)")
         for i in range(16):
             val = self._regs[i]
             table.add_row(f"X{i}", str(val), f"{val:#x}")
@@ -1307,7 +1305,7 @@ class RegisterFile:
         if extra_info:
             for key, value in extra_info.items():
                 table.add_row(key, str(value), f"{value:#x}" if isinstance(value, int) else "")
-        self.console.print(table)
+        console.print(str(table))
 
 # ==================== Vector Register System ====================
 
@@ -1352,24 +1350,22 @@ class VectorRegisterFile:
     def display_vector_registers(self, title: str = "Vector Registers", console: Optional[Console] = None) -> None:
         if console is None:
             return
-        table = Table(title=title, box=box.ROUNDED, border_style="magenta")
-        table.add_column("Register", style="bold")
-        table.add_column("Lane 0", style="green")
-        table.add_column("Lane 1", style="green")
-        table.add_column("Lane 2", style="green")
-        table.add_column("Lane 3", style="green")
+        table = Table(title=title)
+        table.add_column("Register")
+        table.add_column("Lane 0")
+        table.add_column("Lane 1")
+        table.add_column("Lane 2")
+        table.add_column("Lane 3")
         for i in range(32):
             vec = self._regs[i]
             if any(v != 0.0 for v in vec):
                 table.add_row(f"V{i}", f"{vec[0]:.2f}", f"{vec[1]:.2f}", f"{vec[2]:.2f}", f"{vec[3]:.2f}")
-        if table.row_count > 0:
-            console.print(table)
+        if table.rows:
+            console.print(str(table))
 
 # ==================== Statistics ====================
 
 class InstructionProfiler:
-    """Instruction-level performance profiler"""
-    
     def __init__(self):
         self.cycles: Dict[str, int] = defaultdict(int)
         self.latency: Dict[str, int] = {
@@ -1389,14 +1385,14 @@ class InstructionProfiler:
         if console is None:
             return
         total = self.get_total_cycles()
-        table = Table(title="Instruction Cycle Profile", box=box.ROUNDED)
-        table.add_column("Instruction", style="bold")
-        table.add_column("Cycles", style="yellow")
-        table.add_column("Percentage", style="green")
+        table = Table(title="Instruction Cycle Profile")
+        table.add_column("Instruction")
+        table.add_column("Cycles")
+        table.add_column("Percentage")
         for op, cycles in sorted(self.cycles.items(), key=lambda x: x[1], reverse=True)[:20]:
             pct = (cycles / total * 100) if total > 0 else 0
             table.add_row(op, str(cycles), f"{pct:.1f}%")
-        console.print(table)
+        console.print(str(table))
 
 class Statistics:
     def __init__(self):
@@ -1413,6 +1409,7 @@ class Statistics:
         self.jit_blocks_compiled = 0
         self.inst_profiler = InstructionProfiler()
         self.hot_instructions: Dict[str, int] = defaultdict(int)
+        self.performance_counters = PerformanceCounters()
     
     def start(self):
         self.start_time = time.time()
@@ -1426,12 +1423,21 @@ class Statistics:
         self.opcode_count[opcode] += 1
         self.inst_profiler.record(opcode)
         self.hot_instructions[opcode] += 1
+        self.performance_counters.record_instruction(opcode)
     
     def record_memory_read(self):
         self.memory_reads += 1
+        self.performance_counters.record_memory_read()
     
     def record_memory_write(self):
         self.memory_writes += 1
+        self.performance_counters.record_memory_write()
+    
+    def record_cache(self, hit: bool):
+        self.performance_counters.record_cache(hit)
+    
+    def record_branch(self, pc: int, taken: bool, predicted: bool):
+        self.performance_counters.record_branch_result(pc, taken, predicted)
     
     def get_hot_instructions(self, top_n: int = 10) -> List[Tuple[str, int]]:
         return sorted(self.hot_instructions.items(), key=lambda x: x[1], reverse=True)[:top_n]
@@ -1441,9 +1447,9 @@ class Statistics:
         if console is None:
             return
         
-        table = Table(title="Execution Statistics", box=box.ROUNDED, border_style="cyan")
-        table.add_column("Metric", style="bold")
-        table.add_column("Value", style="green")
+        table = Table(title="Execution Statistics")
+        table.add_column("Metric")
+        table.add_column("Value")
         table.add_row("Total Instructions", str(self.instruction_count))
         table.add_row("Total Cycles", str(self.inst_profiler.get_total_cycles()))
         table.add_row("CPI (Cycles/Inst)", f"{self.inst_profiler.get_total_cycles() / self.instruction_count:.2f}" if self.instruction_count > 0 else "N/A")
@@ -1453,10 +1459,14 @@ class Statistics:
         table.add_row("Memory Reads", str(self.memory_reads))
         table.add_row("Memory Writes", str(self.memory_writes))
         
+        perf_stats = self.performance_counters.get_stats()
+        table.add_row("IPC", f"{perf_stats['ipc']:.2f}")
+        table.add_row("Branch Accuracy", f"{perf_stats['branch_accuracy']*100:.1f}%")
+        table.add_row("Cache Hit Rate", f"{perf_stats['cache_hit_rate']*100:.1f}%")
+        
         if cache_stats:
             table.add_row("Cache Hits", str(cache_stats.get('hits', 0)))
             table.add_row("Cache Misses", str(cache_stats.get('misses', 0)))
-            table.add_row("Cache Hit Rate", f"{cache_stats.get('hit_rate', 0) * 100:.1f}%")
         
         if jit_stats:
             table.add_row("JIT Calls", str(jit_stats.get('total_calls', 0)))
@@ -1464,777 +1474,106 @@ class Statistics:
             table.add_row("JIT Hit Rate", f"{jit_stats.get('hit_rate', 0) * 100:.1f}%")
             table.add_row("JIT Blocks Compiled", str(jit_stats.get('blocks_compiled', 0)))
         
-        console.print(table)
+        console.print(str(table))
         
         if self.opcode_count:
-            op_table = Table(title="Instruction Usage", box=box.ROUNDED, border_style="green")
-            op_table.add_column("Instruction", style="bold")
-            op_table.add_column("Count", style="yellow")
-            op_table.add_column("Percentage", style="green")
+            op_table = Table(title="Instruction Usage")
+            op_table.add_column("Instruction")
+            op_table.add_column("Count")
+            op_table.add_column("Percentage")
             total = sum(self.opcode_count.values())
             for op, count in sorted(self.opcode_count.items(), key=lambda x: x[1], reverse=True)[:20]:
                 pct = (count / total * 100) if total > 0 else 0
                 op_table.add_row(op, str(count), f"{pct:.1f}%")
-            console.print(op_table)
+            console.print(str(op_table))
         
-        # Display instruction profile
         self.inst_profiler.display_report(console)
-
-# ==================== CIN Compiler ====================
-
-class TypeInference:
-    """Type inference for CIN expressions"""
-    
-    def __init__(self, variables: Dict[str, Tuple[str, str]], type_system: TypeSystem):
-        self.variables = variables
-        self.type_system = type_system
-    
-    def infer_type(self, expr: str) -> str:
-        """Infer type of an expression"""
-        expr = expr.strip()
-        
-        if re.match(r'^-?\d+$', expr):
-            return 'int'
-        if re.match(r'^-?\d+\.\d+$', expr):
-            return 'float'
-        if expr.startswith('"') and expr.endswith('"'):
-            return 'string'
-        if expr in ('true', 'false'):
-            return 'bool'
-        if expr in self.variables:
-            return self.variables[expr][0]
-        if expr.startswith('(') and expr.endswith(')'):
-            return self.infer_type(expr[1:-1])
-        
-        # Handle function calls
-        func_match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', expr)
-        if func_match:
-            func_name = func_match.group(1)
-            # Built-in functions return types
-            builtin_returns = {
-                'sin': 'float', 'cos': 'float', 'tan': 'float',
-                'sqrt': 'float', 'pow': 'float', 'abs': 'int',
-                'strlen': 'int', 'strcmp': 'int', 'rand': 'int',
-                'time': 'int'
-            }
-            return builtin_returns.get(func_name, 'int')
-        
-        # Handle array access
-        if '[' in expr and ']' in expr:
-            var = expr[:expr.index('[')]
-            if var in self.variables:
-                return self.variables[var][0]
-        
-        return 'int'  # Default
-    
-    def can_convert(self, from_type: str, to_type: str) -> bool:
-        """Check if type conversion is possible"""
-        if from_type == to_type:
-            return True
-        numeric_types = {'int', 'float', 'double', 'byte', 'word', 'dword', 'qword'}
-        if from_type in numeric_types and to_type in numeric_types:
-            return True
-        if from_type == 'int' and to_type == 'bool':
-            return True
-        if from_type == 'bool' and to_type == 'int':
-            return True
-        if from_type == 'char' and to_type == 'int':
-            return True
-        return False
-
-class CINCompiler:
-    def __init__(self, console: Optional[Console] = None):
-        self.console = console or Console()
-        self.type_system = TypeSystem()
-        self.type_inference = None
-        self.lines: List[str] = []
-        self.cpp_lines: List[str] = []
-        self.indent: int = 0
-        self.temp_count: int = 0
-        self.label_count: int = 0
-        self.functions: Dict[str, Dict] = {}
-        self.variables: Dict[str, Tuple[str, str]] = {}  # name -> (type, cpp_type)
-        self.string_literals: Dict[str, str] = {}
-        self.string_count: int = 0
-        self.current_function: Optional[str] = None
-        self.function_code: List[str] = []
-        self.global_code: List[str] = []
-        self.in_function: bool = False
-        self.structs: Dict[str, Dict[str, str]] = {}
-        self.current_line: int = 0
-        self.breakpoints: Set[int] = set()
-        
-        # Built-in function mappings
-        self.builtins = {
-            'print': 'std::cout << {args}',
-            'println': 'std::cout << {args} << std::endl',
-            'input': 'std::cin >> {args}',
-            'read': 'std::cin >> {args}',
-            'write': 'std::cout << {args}',
-            'sin': 'std::sin({args})',
-            'cos': 'std::cos({args})',
-            'tan': 'std::tan({args})',
-            'sqrt': 'std::sqrt({args})',
-            'pow': 'std::pow({args})',
-            'abs': 'std::abs({args})',
-            'strlen': 'std::strlen({args})',
-            'strcmp': 'std::strcmp({args})',
-            'strcpy': 'std::strcpy({args})',
-            'strcat': 'std::strcat({args})',
-            'exit': 'std::exit({args})',
-            'system': 'std::system({args})',
-            'time': 'std::time({args})',
-            'rand': 'std::rand()',
-            'srand': 'std::srand({args})'
-        }
-        
-        # CPU instruction to C++ mapping
-        self.instruction_map = {
-            'MOV': '{dest} = {src};',
-            'ADD': '{dest} = {dest} + {src};',
-            'SUB': '{dest} = {dest} - {src};',
-            'MUL': '{dest} = {dest} * {src};',
-            'DIV': '{dest} = {dest} / {src};',
-            'AND': '{dest} = {dest} & {src};',
-            'OR': '{dest} = {dest} | {src};',
-            'XOR': '{dest} = {dest} ^ {src};',
-            'SHL': '{dest} = {dest} << {src};',
-            'SHR': '{dest} = {dest} >> {src};',
-            'INC': '{dest} = {dest} + 1;',
-            'DEC': '{dest} = {dest} - 1;',
-            'LOAD': '{dest} = memory[{src}];',
-            'STORE': 'memory[{dest}] = {src};',
-            'PUSH': 'memory[--sp] = {src};',
-            'POP': '{dest} = memory[sp++];'
-        }
-    
-    def compile(self, filename: str) -> Tuple[str, str]:
-        """Compile CIN file to C++"""
-        self._reset()
-        
-        # Read source
-        with open(filename, 'r', encoding='utf-8') as f:
-            self.lines = f.readlines()
-        
-        # Initialize type inference
-        self.type_inference = TypeInference(self.variables, self.type_system)
-        
-        # Parse and generate C++
-        self._parse()
-        cpp_code = self._generate_cpp()
-        
-        # Write output
-        base = os.path.splitext(filename)[0]
-        output_file = base + '.cpp'
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(cpp_code)
-        
-        return output_file, cpp_code
-    
-    def _reset(self):
-        self.cpp_lines = []
-        self.functions = {}
-        self.variables = {}
-        self.string_literals = {}
-        self.function_code = []
-        self.global_code = []
-        self.indent = 0
-        self.temp_count = 0
-        self.label_count = 0
-        self.string_count = 0
-        self.current_function = None
-        self.in_function = False
-        self.structs = {}
-        self.current_line = 0
-        self.breakpoints = set()
-    
-    def _indent_str(self) -> str:
-        return '    ' * self.indent
-    
-    def _new_temp(self) -> str:
-        self.temp_count += 1
-        return f'_tmp_{self.temp_count}'
-    
-    def _new_label(self) -> str:
-        self.label_count += 1
-        return f'_label_{self.label_count}'
-    
-    def _parse(self):
-        i = 0
-        while i < len(self.lines):
-            line = self.lines[i].strip()
-            line_num = i + 1
-            self.current_line = line_num
-            
-            # Skip empty lines and comments
-            if not line or line.startswith('//') or line.startswith('#'):
-                i += 1
-                continue
-            
-            # Skip block comments
-            if line.startswith('/*'):
-                while i < len(self.lines) and not self.lines[i].strip().endswith('*/'):
-                    i += 1
-                i += 1
-                continue
-            
-            try:
-                # Struct definition
-                if line.startswith('struct '):
-                    self._parse_struct(line, line_num)
-                # Function definition
-                elif re.match(r'^(function|void|int|float|char|bool|string|double)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(', line):
-                    self._parse_function(line)
-                # Variable declaration - support multi-dimensional arrays
-                elif re.match(r'^(int|float|char|bool|string|double|byte|word|dword|qword|var)\s+[a-zA-Z_][a-zA-Z0-9_]*', line):
-                    self._parse_variable(line)
-                # Control flow
-                elif line.startswith('if '):
-                    self._parse_if(line)
-                elif line.startswith('while '):
-                    self._parse_while(line)
-                elif line.startswith('for '):
-                    self._parse_for(line)
-                elif line == 'break':
-                    self._emit('break;')
-                elif line == 'continue':
-                    self._emit('continue;')
-                elif line == '}':
-                    self.indent -= 1
-                    self._emit('}')
-                    if self.in_function and self.indent == 0:
-                        self._close_function()
-                elif line.startswith('return '):
-                    self._parse_return(line)
-                # Assignment or expression
-                elif '=' in line and not line.startswith('if') and not line.startswith('while') and not line.startswith('for'):
-                    self._parse_assignment(line)
-                # Function call or instruction
-                else:
-                    self._parse_statement(line)
-            except Exception as e:
-                raise CompileError(str(e), line_num)
-            
-            i += 1
-        
-        # Close any open function
-        if self.in_function:
-            self._close_function()
-    
-    def _parse_struct(self, line: str, line_num: int):
-        """Parse struct definition"""
-        match = re.match(r'struct\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*{', line)
-        if not match:
-            raise CompileError(f"Invalid struct declaration: {line}")
-        
-        struct_name = match.group(1)
-        fields = {}
-        
-        # Collect fields until closing brace
-        current_line = line_num
-        while current_line < len(self.lines):
-            field_line = self.lines[current_line].strip()
-            if field_line == '}':
-                break
-            if field_line and not field_line.startswith('//'):
-                # Handle field declarations
-                field_match = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*[^;]+)?(?:;)?$', field_line)
-                if field_match:
-                    field_type, field_name = field_match.groups()
-                    # Check if it's an array type
-                    if '[' in field_type and ']' in field_type:
-                        array_match = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)\[([0-9]+)\]', field_type)
-                        if array_match:
-                            base_type, size = array_match.groups()
-                            fields[field_name] = f"{base_type}[{size}]"
-                    else:
-                        fields[field_name] = field_type
-            current_line += 1
-        
-        self.structs[struct_name] = fields
-        self.type_system.add_struct(struct_name, fields)
-    
-    def _parse_function(self, line: str):
-        match = re.match(r'^(function|void|int|float|char|bool|string|double)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)', line)
-        if not match:
-            raise CompileError(f"Invalid function declaration: {line}")
-        
-        ret_type, func_name, params_str = match.groups()
-        
-        params = []
-        if params_str.strip():
-            for p in params_str.split(','):
-                p = p.strip()
-                if p:
-                    # Handle array parameters
-                    if '[]' in p:
-                        parts = p.split()
-                        if len(parts) >= 2:
-                            param_type = parts[0].replace('[]', '')
-                            param_name = parts[1]
-                            params.append({'type': param_type, 'name': param_name, 'is_array': True})
-                        else:
-                            params.append({'type': 'int', 'name': parts[0], 'is_array': True})
-                    else:
-                        parts = p.split()
-                        if len(parts) >= 2:
-                            params.append({'type': parts[0], 'name': parts[1], 'is_array': False})
-                        else:
-                            params.append({'type': 'int', 'name': parts[0], 'is_array': False})
-        
-        self.current_function = func_name
-        self.functions[func_name] = {'ret_type': ret_type, 'params': params}
-        self.function_code = []
-        self.in_function = True
-        self.indent = 0
-        
-        # Generate C++ signature
-        cpp_ret_type = self.type_system.get_type(ret_type)
-        param_parts = []
-        for p in params:
-            if p.get('is_array', False):
-                param_parts.append(f'{self.type_system.get_type(p["type"])}* {p["name"]}')
-            else:
-                param_parts.append(f'{self.type_system.get_type(p["type"])} {p["name"]}')
-        param_str = ', '.join(param_parts)
-        sig = f'{cpp_ret_type} {func_name}({param_str})'
-        self.function_code.append(sig + ' {')
-        self.indent += 1
-    
-    def _parse_variable(self, line: str):
-        """Parse variable declaration with support for multi-dimensional arrays"""
-        # Check for multi-dimensional array declaration
-        array_match = re.match(
-            r'^(int|float|char|bool|string|double|byte|word|dword|qword|var)\s+([a-zA-Z_][a-zA-Z0-9_]*)(\[[^\]]+\])+(?:\s*=\s*(.+))?$',
-            line
-        )
-        if array_match:
-            var_type, var_name, dims, init = array_match.groups()
-            cpp_type = self.type_system.get_type(var_type)
-            if not init:
-                self._emit(f'{cpp_type} {var_name}{dims};')
-            else:
-                init_expr = init.strip()
-                self._emit(f'{cpp_type} {var_name}{dims} = {init_expr};')
-            self.variables[var_name] = (var_type, f'{cpp_type}{dims}')
-            return
-        
-        # Check for single array declaration
-        array_match = re.match(
-            r'^(int|float|char|bool|string|double|byte|word|dword|qword|var)\s+([a-zA-Z_][a-zA-Z0-9_]*)\[([0-9]+)\](?:\s*=\s*(.+))?$',
-            line
-        )
-        if array_match:
-            var_type, var_name, size, init = array_match.groups()
-            cpp_type = self.type_system.get_type(var_type)
-            if not init:
-                self._emit(f'{cpp_type} {var_name}[{size}];')
-            else:
-                init_expr = init.strip()
-                if init_expr.startswith('{'):
-                    self._emit(f'{cpp_type} {var_name}[{size}] = {init_expr};')
-                else:
-                    self._emit(f'{cpp_type} {var_name}[{size}] = {init_expr};')
-            self.variables[var_name] = (var_type, f'{cpp_type}[{size}]')
-            return
-        
-        # Regular variable declaration
-        match = re.match(r'^(int|float|char|bool|string|double|byte|word|dword|qword|var)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(.+))?$', line)
-        if not match:
-            raise CompileError(f"Invalid variable declaration: {line}")
-        
-        var_type, var_name, init = match.groups()
-        
-        cpp_type = self.type_system.get_type(var_type)
-        
-        if init:
-            self._emit(f'{cpp_type} {var_name} = {self._parse_expression(init)};')
-        else:
-            default = self.type_system.type_defaults.get(var_type, 0)
-            if var_type == 'string':
-                self._emit(f'{cpp_type} {var_name};')
-            else:
-                self._emit(f'{cpp_type} {var_name} = {default};')
-        
-        self.variables[var_name] = (var_type, cpp_type)
-    
-    def _parse_if(self, line: str):
-        match = re.match(r'if\s*\((.+)\)', line)
-        if not match:
-            raise CompileError(f"Invalid if statement: {line}")
-        
-        condition = match.group(1)
-        self._emit(f'if ({self._parse_expression(condition)}) {{')
-        self.indent += 1
-    
-    def _parse_while(self, line: str):
-        match = re.match(r'while\s*\((.+)\)', line)
-        if not match:
-            raise CompileError(f"Invalid while statement: {line}")
-        
-        condition = match.group(1)
-        self._emit(f'while ({self._parse_expression(condition)}) {{')
-        self.indent += 1
-    
-    def _parse_for(self, line: str):
-        match = re.match(r'for\s*\(([^;]*);([^;]*);([^)]*)\)', line)
-        if not match:
-            raise CompileError(f"Invalid for statement: {line}")
-        
-        init, cond, inc = match.groups()
-        self._emit(f'for ({init.strip()}; {cond.strip()}; {inc.strip()}) {{')
-        self.indent += 1
-    
-    def _parse_return(self, line: str):
-        value = line[7:].strip()
-        if value:
-            self._emit(f'return {self._parse_expression(value)};')
-        else:
-            self._emit('return;')
-    
-    def _parse_assignment(self, line: str):
-        parts = line.split('=', 1)
-        if len(parts) != 2:
-            raise CompileError(f"Invalid assignment: {line}")
-        
-        left = parts[0].strip()
-        right = self._parse_expression(parts[1].strip().rstrip(';'))
-        
-        # Check if it's array assignment
-        if '[' in left and ']' in left:
-            var = left[:left.index('[')]
-            idx = left[left.index('[')+1:left.index(']')]
-            self._emit(f'{var}[{idx}] = {right};')
-        elif left in self.structs:
-            self._emit(f'{left} = {right};')
-        else:
-            self._emit(f'{left} = {right};')
-    
-    def _parse_statement(self, line: str):
-        # Check if it's a function call
-        if '(' in line and ')' in line:
-            match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)', line)
-            if match:
-                func_name, args = match.groups()
-                if func_name in self.builtins:
-                    self._emit(self._gen_builtin(func_name, args))
-                else:
-                    self._emit(f'{func_name}({self._parse_args(args)});')
-                return
-        
-        # Check if it's a CPU instruction
-        parts = line.split()
-        if parts and parts[0].upper() in Constants.OPCODE_NAME_TO_ENUM:
-            self._emit(self._gen_instruction(parts))
-            return
-        
-        # Check for label
-        if ':' in line and not line.startswith(' '):
-            label = line.split(':')[0].strip()
-            self._emit(f'{label}:')
-            return
-        
-        # Otherwise treat as expression
-        self._emit(self._parse_expression(line) + ';')
-    
-    def _parse_expression(self, expr: str) -> str:
-        """Parse CIN expression to C++"""
-        # Handle string concatenation with +
-        if '+' in expr and ('"' in expr or "'" in expr):
-            parts = expr.split('+')
-            result = []
-            for part in parts:
-                part = part.strip()
-                if (part.startswith('"') and part.endswith('"')) or \
-                   (part.startswith("'") and part.endswith("'")):
-                    if part in self.variables and self.variables[part][1] == 'std::string':
-                        result.append(part)
-                    else:
-                        result.append(f'std::string({part})')
-                else:
-                    result.append(part)
-            return ' + '.join(result)
-        
-        # Handle function calls in expression
-        for func in self.builtins:
-            pattern = rf'{func}\s*\(([^)]*)\)'
-            if re.search(pattern, expr):
-                match = re.search(pattern, expr)
-                args = match.group(1)
-                replacement = self._gen_builtin(func, args)
-                expr = re.sub(pattern, replacement, expr)
-        
-        # Replace variable names
-        for var, (var_type, cpp_type) in self.variables.items():
-            if var in expr:
-                expr = expr.replace(var, var)
-        
-        return expr
-    
-    def _parse_args(self, args: str) -> str:
-        if not args.strip():
-            return ''
-        parts = [self._parse_expression(p.strip()) for p in args.split(',')]
-        return ', '.join(parts)
-    
-    def _gen_builtin(self, func: str, args: str) -> str:
-        template = self.builtins.get(func, '')
-        if not template:
-            return f'{func}({self._parse_args(args)})'
-        return template.format(args=self._parse_args(args))
-    
-    def _gen_instruction(self, parts: List[str]) -> str:
-        opcode = parts[0].upper()
-        
-        if opcode == 'JMP':
-            return f'goto {parts[1]};'
-        elif opcode == 'JZ':
-            return f'if (z_flag) goto {parts[1]};'
-        elif opcode == 'JNZ':
-            return f'if (!z_flag) goto {parts[1]};'
-        elif opcode == 'JE':
-            return f'if (z_flag) goto {parts[1]};'
-        elif opcode == 'JL':
-            return f'if (n_flag) goto {parts[1]};'
-        elif opcode == 'JG':
-            return f'if (!z_flag && !n_flag) goto {parts[1]};'
-        elif opcode == 'CALL':
-            return f'{parts[1]}();'
-        elif opcode == 'CMP':
-            return f'z_flag = ({parts[1]} == {parts[2]}); n_flag = ({parts[1]} < {parts[2]});'
-        elif opcode == 'HALT':
-            return 'return 0;'
-        elif opcode == 'RET':
-            return 'return;'
-        elif opcode == 'IN':
-            return f'std::cin >> {parts[1]};'
-        elif opcode == 'OUT':
-            return f'std::cout << {parts[1]};'
-        elif opcode in self.instruction_map:
-            template = self.instruction_map[opcode]
-            if len(parts) >= 3:
-                if opcode == 'STORE':
-                    return template.format(dest=parts[1], src=parts[2])
-                elif opcode in ['MOV', 'ADD', 'SUB', 'MUL', 'DIV', 'AND', 'OR', 'XOR', 'SHL', 'SHR']:
-                    return template.format(dest=parts[1], src=parts[2])
-                elif opcode == 'LOAD':
-                    return template.format(dest=parts[1], src=parts[2])
-                else:
-                    return template.format(dest=parts[1], src=parts[2])
-            elif len(parts) == 2:
-                if opcode in ['INC', 'DEC', 'PUSH', 'POP']:
-                    return template.format(dest=parts[1], src=parts[1])
-            return f'// Unsupported: {opcode}'
-        
-        return f'// Unsupported: {opcode}'
-    
-    def _emit(self, code: str):
-        if self.in_function and self.function_code is not None:
-            self.function_code.append(self._indent_str() + code)
-        else:
-            self.global_code.append(self._indent_str() + code)
-    
-    def _close_function(self):
-        if self.in_function and self.function_code is not None:
-            if self.function_code and self.function_code[-1].strip() != '}':
-                self.indent -= 1
-                self.function_code.append('}')
-            self.cpp_lines.extend(self.function_code)
-            self.cpp_lines.append('')
-            self.function_code = []
-            self.in_function = False
-            self.current_function = None
-    
-    def _generate_cpp(self) -> str:
-        cpp = []
-        
-        # Headers
-        cpp.append('#include <iostream>')
-        cpp.append('#include <string>')
-        cpp.append('#include <cmath>')
-        cpp.append('#include <cstdlib>')
-        cpp.append('#include <cstring>')
-        cpp.append('#include <vector>')
-        cpp.append('#include <map>')
-        cpp.append('')
-        cpp.append('using namespace std;')
-        cpp.append('')
-        
-        # CPU state
-        cpp.append('// CPU State')
-        cpp.append('vector<unsigned char> memory(1024, 0);')
-        cpp.append('vector<int> regs(32, 0);')
-        cpp.append('int sp = 1023;')
-        cpp.append('bool z_flag = false;')
-        cpp.append('bool n_flag = false;')
-        cpp.append('bool c_flag = false;')
-        cpp.append('bool v_flag = false;')
-        cpp.append('')
-        
-        # Struct definitions
-        for struct_name, fields in self.structs.items():
-            cpp.append(f'struct {struct_name} {{')
-            for field_name, field_type in fields.items():
-                # Handle array fields
-                if '[' in field_type and ']' in field_type:
-                    array_match = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)\[([0-9]+)\]', field_type)
-                    if array_match:
-                        base_type, size = array_match.groups()
-                        cpp_type = self.type_system.get_type(base_type)
-                        cpp.append(f'    {cpp_type} {field_name}[{size}];')
-                else:
-                    cpp.append(f'    {self.type_system.get_type(field_type)} {field_name};')
-            cpp.append('};')
-            cpp.append('')
-        
-        # Global variables
-        cpp.append('// Global variables')
-        for var, (var_type, cpp_type) in self.variables.items():
-            if var not in self.functions:
-                default = self.type_system.type_defaults.get(var_type, 0)
-                if var_type == 'string':
-                    cpp.append(f'{cpp_type} {var};')
-                else:
-                    cpp.append(f'{cpp_type} {var} = {default};')
-        cpp.append('')
-        
-        # String literals
-        for name, value in self.string_literals.items():
-            cpp.append(f'const char* {name} = "{value}";')
-        if self.string_literals:
-            cpp.append('')
-        
-        # Global code
-        cpp.extend(self.global_code)
-        if self.global_code:
-            cpp.append('')
-        
-        # Functions
-        cpp.extend(self.cpp_lines)
-        
-        # Main function if not present
-        if 'main' not in self.functions:
-            cpp.append('int main() {')
-            cpp.append('    return 0;')
-            cpp.append('}')
-        
-        return '\n'.join(cpp)
-
-# ==================== Profiler ====================
-
-class Profiler:
-    """Performance profiler for CPU execution"""
-    
-    def __init__(self):
-        self.profile_data: Dict[str, float] = {}
-        self.call_stack: List[Tuple[str, float]] = []
-        self.instruction_counts: Dict[str, int] = defaultdict(int)
-        self.start_time: Optional[float] = None
-        self.block_times: Dict[str, float] = {}
-        self.block_start: Optional[float] = None
-    
-    def start_session(self) -> None:
-        """Start profiling session"""
-        self.start_time = time.time()
-        self.profile_data.clear()
-        self.call_stack.clear()
-        self.instruction_counts.clear()
-        self.block_times.clear()
-    
-    def start_function(self, name: str) -> None:
-        """Start profiling a function"""
-        self.call_stack.append((name, time.time()))
-    
-    def end_function(self, name: str) -> None:
-        """End profiling a function"""
-        if self.call_stack:
-            func_name, start_time = self.call_stack.pop()
-            if func_name == name:
-                elapsed = time.time() - start_time
-                self.profile_data[name] = self.profile_data.get(name, 0) + elapsed
-    
-    def start_block(self, block_id: str) -> None:
-        """Start profiling a basic block"""
-        self.block_start = time.time()
-    
-    def end_block(self, block_id: str) -> None:
-        """End profiling a basic block"""
-        if self.block_start is not None:
-            elapsed = time.time() - self.block_start
-            self.block_times[block_id] = self.block_times.get(block_id, 0) + elapsed
-            self.block_start = None
-    
-    def record_instruction(self, opcode: str) -> None:
-        """Record executed instruction"""
-        self.instruction_counts[opcode] += 1
-    
-    def generate_report(self) -> str:
-        """Generate performance report"""
-        total_time = time.time() - self.start_time if self.start_time else 0
-        total_inst = sum(self.instruction_counts.values())
-        
-        report = []
-        report.append("=" * 50)
-        report.append("PROFILE REPORT")
-        report.append("=" * 50)
-        report.append(f"Total time: {total_time:.4f}s")
-        report.append(f"Total instructions: {total_inst}")
-        report.append(f"Instructions/sec: {total_inst / total_time:.2f}" if total_time > 0 else "")
-        report.append("")
-        
-        # Function timing
-        if self.profile_data:
-            report.append("Function Timing:")
-            report.append("-" * 40)
-            sorted_funcs = sorted(self.profile_data.items(), key=lambda x: x[1], reverse=True)
-            for name, elapsed in sorted_funcs[:20]:
-                pct = (elapsed / total_time * 100) if total_time > 0 else 0
-                report.append(f"  {name}: {elapsed:.4f}s ({pct:.1f}%)")
-            report.append("")
-        
-        # Basic block timing
-        if self.block_times:
-            report.append("Basic Block Timing:")
-            report.append("-" * 40)
-            sorted_blocks = sorted(self.block_times.items(), key=lambda x: x[1], reverse=True)
-            for block_id, elapsed in sorted_blocks[:20]:
-                pct = (elapsed / total_time * 100) if total_time > 0 else 0
-                report.append(f"  {block_id}: {elapsed:.4f}s ({pct:.1f}%)")
-            report.append("")
-        
-        # Instruction counts
-        if self.instruction_counts:
-            report.append("Instruction Usage:")
-            report.append("-" * 40)
-            sorted_inst = sorted(self.instruction_counts.items(), key=lambda x: x[1], reverse=True)
-            for opcode, count in sorted_inst[:20]:
-                pct = (count / total_inst * 100) if total_inst > 0 else 0
-                report.append(f"  {opcode}: {count} ({pct:.1f}%)")
-        
-        return "\n".join(report)
-    
-    def display_report(self, console: Optional[Console] = None) -> None:
-        """Display profile report"""
-        if console is None:
-            console = Console()
-        report = self.generate_report()
-        console.print(Panel(report, title="Profiler", border_style="cyan"))
+        self.performance_counters.display(console)
 
 # ==================== Debug Server ====================
 
+@dataclass
+class ConditionalBreakpoint:
+    address: int
+    condition: str
+    count: int = 0
+    hit_count: int = 0
+    enabled: bool = True
+
 class DebugServer:
-    """Remote debug server with GDB-style protocol"""
-    
     def __init__(self, cpu: 'CPU', port: int = 1234):
         self.cpu = cpu
         self.port = port
         self.socket = None
         self.connected = False
         self.running = False
+        self.execution_history: List[Dict] = []
+        self.history_limit = 1000
+        self.history_index = 0
+        self.conditional_breakpoints: List[ConditionalBreakpoint] = []
+    
+    def record_state(self) -> None:
+        snapshot = {
+            'pc': self.cpu.pc,
+            'regs': self.cpu.regs.get_all(),
+            'sp': self.cpu.sp,
+            'pstate': self.cpu.pstate.copy(),
+            'timestamp': time.time()
+        }
+        self.execution_history.append(snapshot)
+        if len(self.execution_history) > self.history_limit:
+            self.execution_history.pop(0)
+        self.history_index = len(self.execution_history) - 1
+    
+    def reverse_step(self) -> bool:
+        if self.history_index > 0:
+            self.history_index -= 1
+            snapshot = self.execution_history[self.history_index]
+            self.cpu.pc = snapshot['pc']
+            for i, val in enumerate(snapshot['regs']):
+                self.cpu.regs.write(i, val)
+            self.cpu.sp = snapshot['sp']
+            self.cpu.pstate = snapshot['pstate'].copy()
+            return True
+        return False
+    
+    def forward_step(self) -> bool:
+        if self.history_index < len(self.execution_history) - 1:
+            self.history_index += 1
+            snapshot = self.execution_history[self.history_index]
+            self.cpu.pc = snapshot['pc']
+            for i, val in enumerate(snapshot['regs']):
+                self.cpu.regs.write(i, val)
+            self.cpu.sp = snapshot['sp']
+            self.cpu.pstate = snapshot['pstate'].copy()
+            return True
+        return False
+    
+    def add_conditional_breakpoint(self, address: int, condition: str) -> None:
+        bp = ConditionalBreakpoint(address=address, condition=condition)
+        self.conditional_breakpoints.append(bp)
+        self.cpu.breakpoints.add(address)
+        self.cpu.logger.info(f"Conditional breakpoint set at PC={address:#x}: {condition}")
+    
+    def check_conditional_breakpoints(self) -> bool:
+        for bp in self.conditional_breakpoints:
+            if bp.address == self.cpu.pc and bp.enabled:
+                try:
+                    namespace = {
+                        'regs': self.cpu.regs.get_all(),
+                        'pc': self.cpu.pc,
+                        'sp': self.cpu.sp,
+                        'pstate': self.cpu.pstate.copy()
+                    }
+                    if eval(bp.condition, {"__builtins__": {}}, namespace):
+                        bp.hit_count += 1
+                        self.cpu.console.print(f"{Colors.colorize('Conditional breakpoint hit', Colors.YELLOW)} at PC={self.cpu.pc:#x}: {bp.condition}")
+                        return True
+                except Exception as e:
+                    self.cpu.logger.warning(f"Condition evaluation failed: {e}")
+        return False
     
     def start(self) -> None:
-        """Start debug server"""
-        import socket
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -2252,7 +1591,6 @@ class DebugServer:
             self.cpu.logger.error(f"Debug server error: {e}")
     
     def _handle_connection(self, conn) -> None:
-        """Handle debug connection"""
         try:
             while self.running:
                 data = conn.recv(1024)
@@ -2268,7 +1606,6 @@ class DebugServer:
             self.connected = False
     
     def _process_command(self, data: bytes) -> str:
-        """Process debug command"""
         cmd = data.decode().strip()
         parts = cmd.split()
         
@@ -2278,17 +1615,31 @@ class DebugServer:
         command = parts[0].lower()
         
         if command == 'step':
+            self.record_state()
             self.cpu.step()
             return "OK: Stepped"
         elif command == 'continue':
             self.cpu.running = True
             return "OK: Continuing"
+        elif command == 'reverse':
+            if self.reverse_step():
+                return "OK: Reversed one step"
+            return "ERROR: No history available"
+        elif command == 'forward':
+            if self.forward_step():
+                return "OK: Forward one step"
+            return "ERROR: No forward history available"
         elif command == 'break':
             if len(parts) > 1:
                 try:
                     addr = int(parts[1])
-                    self.cpu.breakpoints.add(addr)
-                    return f"OK: Breakpoint set at {addr:#x}"
+                    if len(parts) > 2:
+                        condition = ' '.join(parts[2:])
+                        self.add_conditional_breakpoint(addr, condition)
+                        return f"OK: Conditional breakpoint set at {addr:#x}: {condition}"
+                    else:
+                        self.cpu.add_breakpoint(addr)
+                        return f"OK: Breakpoint set at {addr:#x}"
                 except ValueError:
                     return "ERROR: Invalid address"
             return "ERROR: Missing address"
@@ -2296,8 +1647,19 @@ class DebugServer:
             if len(parts) > 1:
                 try:
                     addr = int(parts[1])
-                    self.cpu.breakpoints.discard(addr)
+                    self.cpu.remove_breakpoint(addr)
+                    self.conditional_breakpoints = [bp for bp in self.conditional_breakpoints if bp.address != addr]
                     return f"OK: Breakpoint removed at {addr:#x}"
+                except ValueError:
+                    return "ERROR: Invalid address"
+            return "ERROR: Missing address"
+        elif command == 'watch':
+            if len(parts) > 1:
+                try:
+                    addr = int(parts[1])
+                    access = parts[2] if len(parts) > 2 else 'rw'
+                    self.cpu.memory.set_protection(addr, access)
+                    return f"OK: Watchpoint set at {addr:#x} for {access}"
                 except ValueError:
                     return "ERROR: Invalid address"
             return "ERROR: Missing address"
@@ -2309,18 +1671,714 @@ class DebugServer:
             if len(parts) > 1:
                 try:
                     addr = int(parts[1])
-                    value = self.cpu.memory.read_byte(addr)
-                    return f"mem[{addr:#x}] = {value:#x}"
+                    if len(parts) > 2:
+                        value = int(parts[2])
+                        self.cpu.memory.write_byte(addr, value)
+                        return f"OK: mem[{addr:#x}] = {value:#x}"
+                    else:
+                        value = self.cpu.memory.read_byte(addr)
+                        return f"mem[{addr:#x}] = {value:#x}"
                 except ValueError:
-                    return "ERROR: Invalid address"
+                    return "ERROR: Invalid address or value"
             return "ERROR: Missing address"
+        elif command == 'history':
+            if len(parts) > 1 and parts[1] == 'clear':
+                self.execution_history.clear()
+                self.history_index = 0
+                return "OK: History cleared"
+            return f"OK: History size: {len(self.execution_history)}, index: {self.history_index}"
+        elif command == 'info':
+            if len(parts) > 1:
+                if parts[1] == 'break':
+                    return self._format_breakpoints()
+                elif parts[1] == 'regs':
+                    return str(self.cpu.regs.get_all())
+                elif parts[1] == 'pc':
+                    return f"PC: {self.cpu.pc:#x}"
+            return "ERROR: Missing info target"
         elif command == 'quit':
             self.running = False
             return "OK: Quitting"
         else:
             return f"ERROR: Unknown command: {command}"
+    
+    def _format_breakpoints(self) -> str:
+        lines = ["Breakpoints:"]
+        for bp in self.cpu.breakpoints:
+            lines.append(f"  {bp:#x}")
+        for bp in self.conditional_breakpoints:
+            lines.append(f"  {bp.address:#x} (cond: {bp.condition}, hits: {bp.hit_count})")
+        return "\n".join(lines)
 
-# ==================== CPU Core ====================
+# ==================== CIN Compiler (Fixed - Iterative Parser) ====================
+
+class CINCompiler:
+    def __init__(self, console: Optional[Console] = None):
+        self.console = console or Console()
+        self.lines: List[str] = []
+        self.instructions: List[Tuple[str, List[Tuple[str, int]]]] = []
+        self.labels: Dict[str, int] = {}
+        self.data_labels: Dict[str, int] = {}
+        self.variables: Dict[str, Tuple[str, int]] = {}
+        self.arrays: Dict[str, Tuple[str, List[int], int]] = {}
+        self.string_literals: Dict[str, str] = {}
+        self.current_line: int = 0
+        self.breakpoints: Set[int] = set()
+        self.reg_alloc: Dict[str, int] = {}
+        self.next_reg: int = 0
+        self.label_count: int = 0
+        self.next_data_addr: int = 0
+        self.current_function: Optional[str] = None
+        self._expr_cache: Dict[str, int] = {}
+    
+    def compile(self, filename: str) -> Tuple[List[Tuple[str, List[Tuple[str, int]]]], Dict[str, int], Dict[str, int]]:
+        self._reset()
+        
+        with open(filename, 'r', encoding='utf-8') as f:
+            self.lines = f.readlines()
+        
+        self._parse()
+        return self.instructions, self.labels, self.data_labels
+    
+    def _reset(self):
+        self.instructions = []
+        self.labels = {}
+        self.data_labels = {}
+        self.variables = {}
+        self.arrays = {}
+        self.string_literals = {}
+        self.current_line = 0
+        self.breakpoints = set()
+        self.reg_alloc = {}
+        self.next_reg = 0
+        self.label_count = 0
+        self.next_data_addr = 0
+        self.current_function = None
+        self._expr_cache = {}
+    
+    def _new_label(self) -> str:
+        self.label_count += 1
+        return f"_L{self.label_count}"
+    
+    def _alloc_reg(self, var: str) -> int:
+        if var in self.reg_alloc:
+            return self.reg_alloc[var]
+        reg = self.next_reg
+        self.next_reg += 1
+        if self.next_reg > 30:
+            self.next_reg = 0
+        self.reg_alloc[var] = reg
+        return reg
+    
+    def _parse(self):
+        i = 0
+        while i < len(self.lines):
+            raw_line = self.lines[i]
+            # Remove inline comments (handle strings properly)
+            if '//' in raw_line:
+                in_string = False
+                escaped = False
+                for j, ch in enumerate(raw_line):
+                    if ch == '\\':
+                        escaped = not escaped
+                        continue
+                    if ch == '"' and not escaped:
+                        in_string = not in_string
+                    elif ch == '/' and j + 1 < len(raw_line) and raw_line[j+1] == '/' and not in_string:
+                        raw_line = raw_line[:j]
+                        break
+                    escaped = False
+            
+            line = raw_line.strip()
+            line_num = i + 1
+            self.current_line = line_num
+            
+            if not line or line.startswith('#'):
+                i += 1
+                continue
+            
+            if line.startswith('/*'):
+                while i < len(self.lines) and not self.lines[i].strip().endswith('*/'):
+                    i += 1
+                i += 1
+                continue
+            
+            try:
+                if re.match(r'^(int|float|char|bool|string|byte|word|dword|qword)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\[', line):
+                    self._parse_array(line)
+                elif re.match(r'^(int|float|char|bool|string|byte|word|dword|qword)\s+[a-zA-Z_][a-zA-Z0-9_]*', line):
+                    self._parse_variable(line)
+                elif line.startswith('function ') or re.match(r'^(void|int|float|char|bool)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\(', line):
+                    self._parse_function(line)
+                elif line == 'function main()' or line == 'main()':
+                    self.labels['main'] = len(self.instructions)
+                    self.current_function = 'main'
+                elif line.startswith('if '):
+                    self._parse_if(line)
+                elif line.startswith('while '):
+                    self._parse_while(line)
+                elif line.startswith('for '):
+                    self._parse_for(line)
+                elif line == 'break':
+                    self._emit_inst('JMP', [('label', 'break_end')])
+                elif line == 'continue':
+                    self._emit_inst('JMP', [('label', 'continue_start')])
+                elif line == '}':
+                    if self.current_function:
+                        self._emit_inst('RET', [])
+                        self.current_function = None
+                elif line.startswith('return '):
+                    self._parse_return(line)
+                elif '=' in line and not line.startswith('if') and not line.startswith('while') and not line.startswith('for'):
+                    self._parse_assignment(line)
+                elif line.startswith('print') or line.startswith('println'):
+                    self._parse_print(line)
+                elif line.startswith('input'):
+                    self._parse_input(line)
+                else:
+                    self._parse_statement(line)
+            except Exception as e:
+                raise CPUSimulatorError(f"Line {line_num}: {str(e)}")
+            
+            i += 1
+        
+        if 'main' not in self.labels and self.instructions:
+            self.labels['main'] = 0
+    
+    def _parse_array(self, line: str):
+        line = line.rstrip(';')
+        
+        array_pattern = r'^(int|float|char|bool|string|byte|word|dword|qword)\s+([a-zA-Z_][a-zA-Z0-9_]*)((?:\[[^\]]*\])+)(?:\s*=\s*(.+))?$'
+        match = re.match(array_pattern, line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid array declaration: {line}")
+        
+        var_type, var_name, dims_str, init = match.groups()
+        
+        dim_sizes = []
+        for dim in re.findall(r'\[([^\]]*)\]', dims_str):
+            dim = dim.strip()
+            if dim == '':
+                dim_sizes.append(-1)
+            else:
+                try:
+                    dim_sizes.append(int(dim))
+                except ValueError:
+                    dim_sizes.append(-1)
+        
+        total_size = 1
+        for d in dim_sizes:
+            if d > 0:
+                total_size *= d
+        
+        base_addr = self.next_data_addr
+        self.next_data_addr += total_size * 4
+        
+        self.arrays[var_name] = (var_type, dim_sizes, base_addr)
+        self.variables[var_name] = (var_type, base_addr)
+        
+        if init:
+            init = init.strip()
+            if init.startswith('{') and init.endswith('}'):
+                values = init[1:-1].split(',')
+                for idx, val_str in enumerate(values):
+                    val = self._parse_expression_iterative(val_str.strip())
+                    if idx < total_size:
+                        addr = base_addr + idx * 4
+                        self._emit_inst('MOV', [('reg', 0), ('imm', val)])
+                        self._emit_inst('STORE', [('reg', 0), ('imm', addr)])
+    
+    def _parse_variable(self, line: str):
+        line = line.rstrip(';')
+        match = re.match(r'^(int|float|char|bool|string|byte|word|dword|qword)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(.+))?$', line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid variable declaration: {line}")
+        
+        var_type, var_name, init = match.groups()
+        reg = self._alloc_reg(var_name)
+        self.variables[var_name] = (var_type, reg)
+        
+        if init:
+            self._emit_assignment(var_name, init)
+        else:
+            self._emit_inst('MOV', [('reg', reg), ('imm', 0)])
+    
+    def _parse_function(self, line: str):
+        match = re.match(r'^(function|void|int|float|char|bool)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)', line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid function declaration: {line}")
+        
+        ret_type, func_name, params_str = match.groups()
+        
+        self.labels[func_name] = len(self.instructions)
+        self.current_function = func_name
+        
+        params = []
+        if params_str.strip():
+            for p in params_str.split(','):
+                p = p.strip()
+                if p:
+                    parts = p.split()
+                    if len(parts) >= 2:
+                        params.append((parts[0], parts[1]))
+                    else:
+                        params.append(('int', parts[0]))
+        
+        for param_type, param_name in params:
+            reg = self._alloc_reg(param_name)
+            self.variables[param_name] = (param_type, reg)
+    
+    def _parse_if(self, line: str):
+        match = re.match(r'if\s*\((.+)\)', line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid if statement: {line}")
+        
+        condition = match.group(1)
+        else_label = self._new_label()
+        end_label = self._new_label()
+        
+        self._parse_condition(condition, else_label)
+        self._emit_inst('JMP', [('label', end_label)])
+        self.labels[else_label] = len(self.instructions)
+        self.labels[end_label] = len(self.instructions)
+    
+    def _parse_while(self, line: str):
+        match = re.match(r'while\s*\((.+)\)', line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid while statement: {line}")
+        
+        condition = match.group(1)
+        start_label = self._new_label()
+        end_label = self._new_label()
+        
+        self.labels[start_label] = len(self.instructions)
+        self._parse_condition(condition, end_label)
+        self._emit_inst('JMP', [('label', start_label)])
+        self.labels[end_label] = len(self.instructions)
+    
+    def _parse_for(self, line: str):
+        match = re.match(r'for\s*\(([^;]*);([^;]*);([^)]*)\)', line)
+        if not match:
+            raise CPUSimulatorError(f"Invalid for statement: {line}")
+        
+        init, cond, inc = match.groups()
+        
+        if init.strip():
+            self._parse_statement(init.strip())
+        
+        start_label = self._new_label()
+        end_label = self._new_label()
+        
+        self.labels[start_label] = len(self.instructions)
+        self._parse_condition(cond.strip(), end_label)
+        if inc.strip():
+            self._parse_statement(inc.strip())
+        self._emit_inst('JMP', [('label', start_label)])
+        self.labels[end_label] = len(self.instructions)
+    
+    def _parse_return(self, line: str):
+        value = line[7:].strip()
+        if value:
+            val = self._parse_expression_iterative(value)
+            self._emit_inst('MOV', [('reg', 0), ('imm', val)])
+        self._emit_inst('RET', [])
+    
+    def _parse_assignment(self, line: str):
+        if '[' in line and ']' in line:
+            parts = line.split('=', 1)
+            if len(parts) != 2:
+                raise CPUSimulatorError(f"Invalid array assignment: {line}")
+            
+            left = parts[0].strip()
+            right = parts[1].strip().rstrip(';')
+            
+            array_match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)((?:\[[^\]]*\])+)$', left)
+            if array_match:
+                arr_name, indices_str = array_match.groups()
+                if arr_name in self.arrays:
+                    arr_type, dims, base_addr = self.arrays[arr_name]
+                    
+                    offset = 0
+                    index_exprs = re.findall(r'\[([^\]]*)\]', indices_str)
+                    for idx, expr in enumerate(index_exprs):
+                        idx_val = self._parse_expression_iterative(expr.strip())
+                        if idx < len(dims) and dims[idx] > 0:
+                            offset = idx_val * 4
+                            break
+                    
+                    addr = base_addr + offset
+                    val = self._parse_expression_iterative(right)
+                    self._emit_inst('STORE', [('reg', val), ('imm', addr)])
+                    return
+        
+        parts = line.split('=', 1)
+        if len(parts) != 2:
+            raise CPUSimulatorError(f"Invalid assignment: {line}")
+        
+        left = parts[0].strip()
+        right = parts[1].strip().rstrip(';')
+        self._emit_assignment(left, right)
+    
+    def _emit_assignment(self, left: str, right: str):
+        right_val = self._parse_expression_iterative(right)
+        
+        if left in self.variables:
+            var_type, reg = self.variables[left]
+            self._emit_inst('MOV', [('reg', reg), ('imm', right_val)])
+        else:
+            reg = self._alloc_reg(left)
+            self.variables[left] = ('int', reg)
+            self._emit_inst('MOV', [('reg', reg), ('imm', right_val)])
+    
+    def _parse_expression_iterative(self, expr: str) -> int:
+        """Iterative expression parser to avoid recursion depth issues"""
+        expr = expr.strip()
+        
+        # Cache check
+        if expr in self._expr_cache:
+            return self._expr_cache[expr]
+        
+        # String literal
+        if expr.startswith('"') and expr.endswith('"'):
+            return 0
+        
+        # Number literal
+        if re.match(r'^-?\d+$', expr):
+            return int(expr)
+        if re.match(r'^-?\d+\.\d+$', expr):
+            return int(float(expr))
+        
+        # Boolean
+        if expr in ('true', 'false'):
+            return 1 if expr == 'true' else 0
+        
+        # Simple variable
+        if expr in self.variables:
+            _, reg = self.variables[expr]
+            return reg
+        
+        # Array access: arr[i]
+        array_match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)((?:\[[^\]]*\])+)$', expr)
+        if array_match:
+            arr_name, indices_str = array_match.groups()
+            if arr_name in self.arrays:
+                arr_type, dims, base_addr = self.arrays[arr_name]
+                offset = 0
+                index_exprs = re.findall(r'\[([^\]]*)\]', indices_str)
+                for idx, expr_str in enumerate(index_exprs):
+                    idx_val = self._parse_expression_iterative(expr_str.strip())
+                    if idx < len(dims) and dims[idx] > 0:
+                        offset = idx_val * 4
+                        break
+                
+                addr = base_addr + offset
+                reg = self._alloc_reg(f"_tmp_{expr}")
+                self._emit_inst('LOAD', [('reg', reg), ('imm', addr)])
+                self._expr_cache[expr] = reg
+                return reg
+        
+        # Parenthesized expression
+        if expr.startswith('(') and expr.endswith(')'):
+            result = self._parse_expression_iterative(expr[1:-1])
+            self._expr_cache[expr] = result
+            return result
+        
+        # Handle expressions with operators - use stack-based approach
+        return self._parse_expression_with_stack(expr)
+
+    def _parse_expression_with_stack(self, expr: str) -> int:
+        """Parse expression using stack-based approach for better performance"""
+        # Define operator precedence
+        precedence = {
+            '||': 1, '&&': 2,
+            '|': 3, '^': 4, '&': 5,
+            '==': 6, '!=': 6,
+            '<': 7, '>': 7, '<=': 7, '>=': 7,
+            '<<': 8, '>>': 8,
+            '+': 9, '-': 9,
+            '*': 10, '/': 10, '%': 10
+        }
+        
+        # Tokenize the expression
+        tokens = self._tokenize_expression(expr)
+        if not tokens:
+            return 0
+        
+        # Convert to postfix (RPN) using shunting-yard algorithm
+        output_queue = []
+        operator_stack = []
+        
+        for token in tokens:
+            if self._is_number(token):
+                output_queue.append(('number', int(token)))
+            elif token in precedence:
+                while (operator_stack and operator_stack[-1] in precedence and 
+                       precedence[operator_stack[-1]] >= precedence[token]):
+                    output_queue.append(('operator', operator_stack.pop()))
+                operator_stack.append(token)
+            elif token == '(':
+                operator_stack.append(token)
+            elif token == ')':
+                while operator_stack and operator_stack[-1] != '(':
+                    output_queue.append(('operator', operator_stack.pop()))
+                if operator_stack and operator_stack[-1] == '(':
+                    operator_stack.pop()
+            elif token in self.variables:
+                _, reg = self.variables[token]
+                output_queue.append(('variable', reg))
+            else:
+                # Try to parse as number or variable
+                try:
+                    output_queue.append(('number', int(token)))
+                except ValueError:
+                    # Could be a function call or other identifier
+                    if token in self.variables:
+                        _, reg = self.variables[token]
+                        output_queue.append(('variable', reg))
+                    else:
+                        return 0
+        
+        while operator_stack:
+            if operator_stack[-1] not in ('(', ')'):
+                output_queue.append(('operator', operator_stack.pop()))
+            else:
+                operator_stack.pop()
+        
+        # Evaluate postfix expression
+        eval_stack = []
+        
+        for token_type, token_value in output_queue:
+            if token_type == 'number':
+                eval_stack.append(token_value)
+            elif token_type == 'variable':
+                eval_stack.append(token_value)
+            elif token_type == 'operator':
+                if len(eval_stack) < 2:
+                    continue
+                b = eval_stack.pop()
+                a = eval_stack.pop()
+                result = self._apply_operator(token_value, a, b)
+                eval_stack.append(result)
+        
+        if eval_stack:
+            return eval_stack[-1]
+        return 0
+
+    def _tokenize_expression(self, expr: str) -> List[str]:
+        """Tokenize expression into tokens"""
+        tokens = []
+        current = ""
+        i = 0
+        
+        while i < len(expr):
+            ch = expr[i]
+            
+            if ch in '()':
+                if current:
+                    tokens.append(current)
+                    current = ""
+                tokens.append(ch)
+            elif ch in ' \t':
+                if current:
+                    tokens.append(current)
+                    current = ""
+            elif ch in '+-*/%&|^<>':
+                # Check for multi-character operators
+                op = ch
+                if i + 1 < len(expr) and expr[i+1] in '=&|':
+                    op += expr[i+1]
+                    i += 1
+                elif ch == '<' and i + 1 < len(expr) and expr[i+1] == '<':
+                    op += expr[i+1]
+                    i += 1
+                elif ch == '>' and i + 1 < len(expr) and expr[i+1] == '>':
+                    op += expr[i+1]
+                    i += 1
+                elif ch == '=' and i + 1 < len(expr) and expr[i+1] == '=':
+                    op += expr[i+1]
+                    i += 1
+                elif ch == '!' and i + 1 < len(expr) and expr[i+1] == '=':
+                    op += expr[i+1]
+                    i += 1
+                
+                if current:
+                    tokens.append(current)
+                    current = ""
+                tokens.append(op)
+            elif ch.isalnum() or ch == '_':
+                current += ch
+            else:
+                # Skip unknown characters
+                if current:
+                    tokens.append(current)
+                    current = ""
+            
+            i += 1
+        
+        if current:
+            tokens.append(current)
+        
+        return tokens
+
+    def _is_number(self, token: str) -> bool:
+        """Check if token is a number"""
+        try:
+            int(token)
+            return True
+        except ValueError:
+            return False
+
+    def _apply_operator(self, op: str, a: int, b: int) -> int:
+        """Apply binary operator"""
+        op_map = {
+            '+': lambda x, y: x + y,
+            '-': lambda x, y: x - y,
+            '*': lambda x, y: x * y,
+            '/': lambda x, y: x // y if y != 0 else 0,
+            '%': lambda x, y: x % y if y != 0 else 0,
+            '&': lambda x, y: x & y,
+            '|': lambda x, y: x | y,
+            '^': lambda x, y: x ^ y,
+            '<<': lambda x, y: x << y,
+            '>>': lambda x, y: x >> y,
+            '==': lambda x, y: 1 if x == y else 0,
+            '!=': lambda x, y: 1 if x != y else 0,
+            '<': lambda x, y: 1 if x < y else 0,
+            '>': lambda x, y: 1 if x > y else 0,
+            '<=': lambda x, y: 1 if x <= y else 0,
+            '>=': lambda x, y: 1 if x >= y else 0,
+            '&&': lambda x, y: 1 if x and y else 0,
+            '||': lambda x, y: 1 if x or y else 0,
+        }
+        return op_map.get(op, lambda x, y: 0)(a, b)
+    
+    def _parse_condition(self, condition: str, else_label: str):
+        condition = condition.strip()
+        
+        for comp in ['==', '!=', '<', '>', '<=', '>=']:
+            if comp in condition:
+                left, right = condition.split(comp, 1)
+                left_val = self._parse_expression_iterative(left.strip())
+                right_val = self._parse_expression_iterative(right.strip())
+                self._emit_inst('CMP', [('reg', left_val), ('reg', right_val)])
+                
+                jump_map = {
+                    '==': 'JE', '!=': 'JNZ',
+                    '<': 'JL', '>': 'JG',
+                    '<=': 'JZ', '>=': 'JZ'
+                }
+                jump_op = jump_map.get(comp, 'JZ')
+                
+                if comp == '<=':
+                    self._emit_inst('JG', [('label', else_label)])
+                elif comp == '>=':
+                    self._emit_inst('JL', [('label', else_label)])
+                else:
+                    self._emit_inst(jump_op, [('label', else_label)])
+                return
+        
+        val = self._parse_expression_iterative(condition)
+        if isinstance(val, int):
+            if val == 0:
+                self._emit_inst('JMP', [('label', else_label)])
+            return
+        
+        self._emit_inst('CMP', [('reg', val), ('imm', 0)])
+        self._emit_inst('JE', [('label', else_label)])
+    
+    def _emit_inst(self, opcode: str, args: List[Tuple[str, Any]]):
+        resolved_args = []
+        for arg_type, arg_val in args:
+            if arg_type == 'label':
+                if isinstance(arg_val, str) and arg_val in self.labels:
+                    resolved_args.append(('imm', self.labels[arg_val]))
+                else:
+                    resolved_args.append(('label', arg_val))
+            elif arg_type == 'reg':
+                resolved_args.append(('reg', arg_val))
+            elif arg_type == 'imm':
+                resolved_args.append(('imm', arg_val))
+            else:
+                resolved_args.append((arg_type, arg_val))
+        self.instructions.append((opcode, resolved_args))
+    
+    def _parse_statement(self, line: str):
+        if '(' in line and ')' in line:
+            match = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)$', line)
+            if match:
+                func_name, args = match.groups()
+                self._emit_call(func_name, args)
+                return
+        
+        if ':' in line and not line.startswith(' '):
+            label = line.split(':')[0].strip()
+            self.labels[label] = len(self.instructions)
+            return
+    
+    def _emit_call(self, func_name: str, args: str) -> int:
+        if func_name in ('print', 'println', 'input', 'read', 'write'):
+            return self._emit_builtin(func_name, args)
+        
+        if func_name in self.labels:
+            self._emit_inst('CALL', [('label', func_name)])
+        else:
+            if func_name == 'print':
+                self._parse_print(f"print({args})")
+            elif func_name == 'println':
+                self._parse_print(f"println({args})")
+            elif func_name == 'input':
+                self._parse_input(f"input({args})")
+        
+        return 0
+    
+    def _emit_builtin(self, func: str, args: str) -> int:
+        if func == 'print':
+            self._parse_print(f"print({args})")
+        elif func == 'println':
+            self._parse_print(f"println({args})")
+        elif func == 'input':
+            self._parse_input(f"input({args})")
+        return 0
+    
+    def _parse_print(self, line: str):
+        match = re.match(r'(print|println)\s*\(([^)]*)\)', line)
+        if match:
+            func, args = match.groups()
+            if args:
+                # Handle multiple arguments separated by commas
+                paren_count = 0
+                current_arg = ""
+                for ch in args:
+                    if ch == '(':
+                        paren_count += 1
+                    elif ch == ')':
+                        paren_count -= 1
+                    elif ch == ',' and paren_count == 0:
+                        if current_arg.strip():
+                            val = self._parse_expression_iterative(current_arg.strip())
+                            self._emit_inst('OUT', [('reg', val)])
+                        current_arg = ""
+                        continue
+                    current_arg += ch
+                if current_arg.strip():
+                    val = self._parse_expression_iterative(current_arg.strip())
+                    self._emit_inst('OUT', [('reg', val)])
+                if func == 'println':
+                    self._emit_inst('OUT', [('imm', 10)])
+    
+    def _parse_input(self, line: str):
+        match = re.match(r'input\s*\(([^)]*)\)', line)
+        if match:
+            var = match.group(1).strip()
+            if var in self.variables:
+                _, reg = self.variables[var]
+                self._emit_inst('IN', [('reg', reg)])
+            else:
+                reg = self._alloc_reg(var)
+                self.variables[var] = ('int', reg)
+                self._emit_inst('IN', [('reg', reg)])
+
+# ==================== CPU Class ====================
 
 class CPU:
     def __init__(self, config: Config, filename: str, 
@@ -2332,63 +2390,42 @@ class CPU:
         self.config = config
         self.filename = filename
         
-        # Logger
         self.logger = Logger(self.console, config.log_level)
         if config.log_file:
             self.logger.set_log_file(config.log_file)
         
-        # Memory with cache
-        self.memory = Memory(self.console, config.mem_size)
+        self.memory = FastMemory(config.mem_size)
         self.cache = Cache(config.cache_size, config.cache_assoc)
         self.memory.set_cache(self.cache)
         
-        # Registers
         self.regs = RegisterFile(self.console)
         self.vec_regs = VectorRegisterFile()
         
-        # State
         self.pstate = {'N': False, 'Z': False, 'C': False, 'V': False}
         self.pc = 0
         self.sp = config.mem_size - 1
         
-        # Instructions
         self.instructions: List[Tuple[str, List[Tuple[str, int]]]] = []
         self.labels: Dict[str, int] = {}
         self.data_labels: Dict[str, int] = {}
         self.pl_source: List[str] = []
         
-        # Statistics
         self.stats = Statistics()
-        
-        # JIT Compiler
         self.jit = JITCompiler(self) if config.enable_jit else None
+        self.profiler = None
         
-        # Profiler
-        self.profiler = Profiler() if config.profile else None
-        
-        # Running state
         self.running = False
         self.is_debugging = False
-        
-        # Breakpoints
         self.breakpoints: Set[int] = set()
-        
-        # Debug server
         self.debug_server: Optional[DebugServer] = None
         
-        # Instruction handler dispatch table for fast execution
         self._init_dispatch_table()
-        
-        # Fast dispatch table for frequently used instructions
-        self._fast_dispatch = {}
         self._init_fast_dispatch()
         
-        # Check if .cin file - compile it
-        if filename.endswith('.cin') and not self.config.no_compile:
-            self._compile_and_build(filename)
+        if filename.endswith('.cin'):
+            self._compile_and_run(filename)
             return
         
-        # Load program
         if from_bin:
             self.load_bin(filename)
         else:
@@ -2400,22 +2437,18 @@ class CPU:
             
             if filename.endswith('.pl'):
                 self.assemble_pl(filename)
-            elif filename.endswith('.cin'):
-                self._load_compiled(filename)
             else:
                 self.assemble(filename)
         
-        # Warm up cache
         self.cache.warmup(self.instructions)
-        
         self.logger.info(f"CPU initialized, instructions: {len(self.instructions)}")
     
     def _init_dispatch_table(self):
-        """Initialize instruction handler dispatch table for fast execution"""
         self._dispatch_table = {}
         
-        # Base instructions
         self._dispatch_table['MOV'] = self._exec_mov
+        self._dispatch_table['LOAD'] = self._exec_load
+        self._dispatch_table['STORE'] = self._exec_store
         self._dispatch_table['ADD'] = self._exec_add
         self._dispatch_table['SUB'] = self._exec_sub
         self._dispatch_table['MUL'] = self._exec_mul
@@ -2441,10 +2474,6 @@ class CPU:
         self._dispatch_table['IN'] = self._exec_in
         self._dispatch_table['OUT'] = self._exec_out
         self._dispatch_table['HALT'] = self._exec_halt
-        self._dispatch_table['LOAD'] = self._exec_load
-        self._dispatch_table['STORE'] = self._exec_store
-        
-        # ARM64 instructions
         self._dispatch_table['ADDS'] = self._exec_adds
         self._dispatch_table['SUBS'] = self._exec_subs
         self._dispatch_table['LSL'] = self._exec_lsl
@@ -2457,8 +2486,6 @@ class CPU:
         self._dispatch_table['BL'] = self._exec_bl
         self._dispatch_table['BR'] = self._exec_br
         self._dispatch_table['NOP'] = self._exec_nop
-        
-        # Floating point
         self._dispatch_table['FADD'] = self._exec_fadd
         self._dispatch_table['FSUB'] = self._exec_fsub
         self._dispatch_table['FMUL'] = self._exec_fmul
@@ -2466,16 +2493,12 @@ class CPU:
         self._dispatch_table['FCMP'] = self._exec_fcmp
         self._dispatch_table['LDRS'] = self._exec_ldrs
         self._dispatch_table['STRS'] = self._exec_strs
-        
-        # Vector
         self._dispatch_table['VADD'] = self._exec_vadd
         self._dispatch_table['VSUB'] = self._exec_vsub
         self._dispatch_table['VMUL'] = self._exec_vmul
         self._dispatch_table['VDIV'] = self._exec_vdiv
         self._dispatch_table['VLD1'] = self._exec_vld1
         self._dispatch_table['VST1'] = self._exec_vst1
-        
-        # RISC-V
         self._dispatch_table['LB'] = self._exec_lb
         self._dispatch_table['LH'] = self._exec_lh
         self._dispatch_table['LW'] = self._exec_lw
@@ -2505,55 +2528,552 @@ class CPU:
         self._dispatch_table['AUIPC'] = self._exec_auipc
     
     def _init_fast_dispatch(self):
-        """Initialize fast dispatch table for common instructions"""
-        self._fast_dispatch['MOV'] = self._exec_mov
-        self._fast_dispatch['ADD'] = self._exec_add
-        self._fast_dispatch['SUB'] = self._exec_sub
-        self._fast_dispatch['MUL'] = self._exec_mul
-        self._fast_dispatch['DIV'] = self._exec_div
-        self._fast_dispatch['AND'] = self._exec_and
-        self._fast_dispatch['OR'] = self._exec_or
-        self._fast_dispatch['XOR'] = self._exec_xor
-        self._fast_dispatch['INC'] = self._exec_inc
-        self._fast_dispatch['DEC'] = self._exec_dec
-        self._fast_dispatch['CMP'] = self._exec_cmp
-        self._fast_dispatch['JMP'] = self._exec_jmp
-        self._fast_dispatch['LOAD'] = self._exec_load
-        self._fast_dispatch['STORE'] = self._exec_store
-        self._fast_dispatch['PUSH'] = self._exec_push
-        self._fast_dispatch['POP'] = self._exec_pop
-        self._fast_dispatch['CALL'] = self._exec_call
-        self._fast_dispatch['RET'] = self._exec_ret
-        self._fast_dispatch['HALT'] = self._exec_halt
+        self._fast_dispatch = {
+            'MOV': self._exec_mov,
+            'ADD': self._exec_add,
+            'SUB': self._exec_sub,
+            'MUL': self._exec_mul,
+            'DIV': self._exec_div,
+            'AND': self._exec_and,
+            'OR': self._exec_or,
+            'XOR': self._exec_xor,
+            'INC': self._exec_inc,
+            'DEC': self._exec_dec,
+            'CMP': self._exec_cmp,
+            'JMP': self._exec_jmp,
+            'LOAD': self._exec_load,
+            'STORE': self._exec_store,
+            'PUSH': self._exec_push,
+            'POP': self._exec_pop,
+            'CALL': self._exec_call,
+            'RET': self._exec_ret,
+            'HALT': self._exec_halt
+        }
     
-    def _fast_get_val(self, op: Tuple[str, int]) -> int:
-        """Fast value access with minimal type checking"""
-        if op[0] == 'reg':
-            idx = op[1]
-            if idx == 31:
-                return 0
-            return self.regs._regs[idx]
-        elif op[0] == 'imm':
-            return op[1]
-        elif op[0] == 'mem':
-            return self.memory.read_byte(op[1])
+    def _compile_and_run(self, filename: str) -> None:
+        self.logger.info(f"Compiling CIN: {filename}")
+        
+        compiler = CINCompiler(self.console)
+        
+        try:
+            self.instructions, self.labels, self.data_labels = compiler.compile(filename)
+            self.logger.info(f"CIN compiled: {len(self.instructions)} instructions")
+            
+            if self.config.compile_to_bin:
+                output_file = self.config.output_file or os.path.splitext(filename)[0] + '.bin'
+                self.save_bin(output_file)
+                self.logger.info(f"Binary saved to {output_file}")
+                return
+            
+            self.cache.warmup(self.instructions)
+            self.logger.info("Starting execution")
+            
+            if 'main' in self.labels:
+                self.pc = self.labels['main']
+            else:
+                self.pc = 0
+            
+            self.run()
+            
+        except Exception as e:
+            self.logger.error(f"Compilation failed: {e}")
+            raise
+
+    # ==================== CROM Operations ====================
+    
+    def load_crom(self, crom_file: str) -> None:
+        if not os.path.exists(crom_file):
+            self._create_default_crom(crom_file)
+            return
+        
+        with open(crom_file, 'rb') as f:
+            data = f.read()
+        
+        if len(data) < 8:
+            raise CPUSimulatorError(f".crom file too short: {len(data)} bytes")
+        
+        magic = data[:4]
+        if magic == Constants.CROM_MAGIC:
+            version = data[4]
+            
+            if version == 3:
+                if len(data) < 16:
+                    raise CPUSimulatorError(".crom header incomplete")
+                
+                mem_size = struct.unpack('<I', data[5:9])[0]
+                flags = data[9]
+                compressed = bool(flags & 0x01)
+                offset = 16
+                if compressed:
+                    try:
+                        decompressed = zlib.decompress(data[offset:])
+                        bytes_data = decompressed[:min(mem_size, len(decompressed))]
+                    except zlib.error as e:
+                        raise CPUSimulatorError(f"Failed to decompress .crom: {e}")
+                else:
+                    bytes_data = data[offset:offset+mem_size]
+                
+                for i, byte in enumerate(bytes_data):
+                    if i < len(self.memory):
+                        self.memory.write_byte(i, byte)
+                
+                self.logger.info(f"Loaded .crom v3: {len(bytes_data)} bytes, compressed={compressed}")
+            else:
+                raise CPUSimulatorError(f"Unsupported .crom version: {version}")
         else:
-            return self.get_val(op)
+            mem_size = struct.unpack('<I', data[:4])[0]
+            bytes_data = data[4:4+mem_size]
+            for i, byte in enumerate(bytes_data):
+                if i < len(self.memory):
+                    self.memory.write_byte(i, byte)
+            self.logger.info(f"Loaded .crom (legacy): {len(bytes_data)} bytes")
+    
+    def _create_default_crom(self, crom_file: str) -> None:
+        self.save_crom(crom_file)
+        self.logger.info(f"Created default .crom: {crom_file}")
+    
+    def save_crom(self, crom_file: Optional[str] = None) -> None:
+        if crom_file is None:
+            crom_file = self.crom_file
+        
+        self.cache.flush()
+        mem_data = bytes(self.memory._memory)
+        
+        flags = 0
+        if self.config.compress_crom:
+            flags |= 0x01
+        
+        data_to_write = mem_data
+        if self.config.compress_crom:
+            data_to_write = zlib.compress(mem_data, level=6)
+        
+        with open(crom_file, 'wb') as f:
+            f.write(Constants.CROM_MAGIC)
+            f.write(struct.pack('<B', Constants.CROM_VERSION))
+            f.write(struct.pack('<I', len(mem_data)))
+            f.write(struct.pack('<B', flags))
+            checksum = zlib.crc32(data_to_write) & 0xFFFFFFFF
+            f.write(struct.pack('<I', checksum))
+            f.write(b'\x00\x00')
+            f.write(data_to_write)
+        
+        self.logger.info(f".crom saved to {crom_file}")
+
+    # ==================== Assembler ====================
+    
+    def assemble_pl(self, filename: str) -> None:
+        self.pl_source = []
+        raw_lines = []
+        
+        abs_path = os.path.abspath(filename)
+        dir_path = os.path.dirname(abs_path)
+        
+        if not os.path.exists(abs_path):
+            raise CPUSimulatorError(f"File '{filename}' not found")
+        
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            for line_num, raw in enumerate(f, 1):
+                line = raw
+                if '#' in line:
+                    line = line[:line.index('#')]
+                if '//' in line:
+                    line = line[:line.index('//')]
+                line = line.strip()
+                
+                if not line:
+                    continue
+                
+                if line.startswith('#include'):
+                    parts = line.split()
+                    if len(parts) < 2:
+                        raise AssemblerError(line, "#include format error", line_num, filename)
+                    inc_file = parts[1].strip('"<>')
+                    inc_path = os.path.join(dir_path, inc_file)
+                    if not os.path.exists(inc_path):
+                        raise AssemblerError(line, f"Include file '{inc_file}' not found", line_num, filename)
+                    sub_lines = self._preprocess_pl(inc_path, set())
+                    raw_lines.extend(sub_lines)
+                else:
+                    raw_lines.append((line, line_num, filename))
+                    self.pl_source.append(line)
+        
+        self._assemble_pl_lines(raw_lines, filename)
+        self.logger.info(f"PL assembly successful: {len(self.instructions)} instructions")
+    
+    def _preprocess_pl(self, filename: str, loaded: Set[str]) -> List[Tuple[str, int, str]]:
+        if filename in loaded:
+            return []
+        
+        loaded.add(filename)
+        abs_path = os.path.abspath(filename)
+        dir_path = os.path.dirname(abs_path)
+        
+        if not os.path.exists(abs_path):
+            raise CPUSimulatorError(f"File '{filename}' not found")
+        
+        lines = []
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            for line_num, raw in enumerate(f, 1):
+                line = raw
+                if '#' in line:
+                    line = line[:line.index('#')]
+                if '//' in line:
+                    line = line[:line.index('//')]
+                line = line.strip()
+                
+                if not line:
+                    continue
+                
+                if line.startswith('#include'):
+                    parts = line.split()
+                    if len(parts) < 2:
+                        raise AssemblerError(line, "#include format error", line_num, filename)
+                    inc_file = parts[1].strip('"<>')
+                    inc_path = os.path.join(dir_path, inc_file)
+                    if not os.path.exists(inc_path):
+                        raise AssemblerError(line, f"Include file '{inc_file}' not found", line_num, filename)
+                    lines.extend(self._preprocess_pl(inc_path, loaded))
+                else:
+                    lines.append((line, line_num, filename))
+        
+        return lines
+    
+    def _assemble_pl_lines(self, lines: List[Tuple[str, int, str]], filename: str) -> None:
+        self.instructions = []
+        self.labels = {}
+        self.data_labels = {}
+        
+        data_addr = 0
+        instr_index = 0
+        current_section = 'TEXT'
+        parsed_lines = []
+        
+        i = 0
+        while i < len(lines):
+            line, line_num, fname = lines[i]
+            
+            if line.upper() in ['.TEXT', '.CODE', 'TEXT', 'CODE']:
+                current_section = 'TEXT'
+                i += 1
+                continue
+            elif line.upper() in ['.DATA', 'DATA']:
+                current_section = 'DATA'
+                i += 1
+                continue
+            
+            if ':' in line and not line.startswith('.'):
+                parts = line.split(':', 1)
+                label = parts[0].strip()
+                rest = parts[1].strip() if len(parts) > 1 else ''
+                
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', label):
+                    raise AssemblerError(line, f"Invalid label: {label}", line_num, fname)
+                
+                if current_section == 'TEXT':
+                    self.labels[label] = instr_index
+                else:
+                    self.data_labels[label] = data_addr
+                
+                if rest:
+                    line = rest
+                else:
+                    i += 1
+                    continue
+            
+            if current_section == 'DATA':
+                self._handle_data_directive_pl(line, line_num, fname, data_addr)
+                i += 1
+                continue
+            
+            if line:
+                parsed_lines.append((line, instr_index, line_num, fname))
+                instr_index += 1
+            
+            i += 1
+        
+        for line, idx, line_num, fname in parsed_lines:
+            self._parse_pl_instruction(line, idx, line_num, fname)
+    
+    def _handle_data_directive_pl(self, line: str, line_num: int, fname: str, data_addr: int) -> None:
+        parts = line.split()
+        if not parts:
+            return
+        
+        directive = parts[0].upper()
+        if directive not in Constants.DATA_DIRECTIVES:
+            if directive in ['BYTE', 'byte']:
+                directive = 'DB'
+            elif directive in ['WORD', 'word']:
+                directive = 'DW'
+            elif directive in ['DWORD', 'dword']:
+                directive = 'DD'
+            elif directive in ['QWORD', 'qword']:
+                directive = 'DQ'
+            else:
+                raise AssemblerError(line, f"Unknown data directive: {directive}", line_num, fname)
+        
+        values = []
+        for val_str in ' '.join(parts[1:]).split(','):
+            val_str = val_str.strip()
+            if val_str.startswith('0x'):
+                values.append(int(val_str, 16))
+            elif val_str.startswith('0b'):
+                values.append(int(val_str[2:], 2))
+            elif val_str.startswith('0o'):
+                values.append(int(val_str[2:], 8))
+            elif val_str.startswith("'") and val_str.endswith("'"):
+                values.append(ord(val_str[1]))
+            elif val_str.startswith('"') and val_str.endswith('"'):
+                for ch in val_str[1:-1]:
+                    values.append(ord(ch))
+                values.append(0)
+            else:
+                try:
+                    values.append(self.parse_immediate(val_str))
+                except ValueError:
+                    raise AssemblerError(line, f"Invalid data value: {val_str}", line_num, fname)
+        
+        for val in values:
+            if directive == 'DB':
+                if data_addr < len(self.memory):
+                    self.memory.write_byte(data_addr, val & 0xFF)
+                    data_addr += 1
+            elif directive == 'DW':
+                if data_addr + 1 < len(self.memory):
+                    self.memory.write_word(data_addr, val & 0xFFFF)
+                    data_addr += 2
+            elif directive == 'DD':
+                if data_addr + 3 < len(self.memory):
+                    self.memory.write_dword(data_addr, val)
+                    data_addr += 4
     
     def parse_immediate(self, val: str) -> int:
-        """Parse immediate value with support for multiple bases"""
         val = val.strip()
         if val.startswith('0x') or val.startswith('0X'):
             return int(val, 16)
         if val.startswith('0b') or val.startswith('0B'):
-            return int(val, 2)
+            return int(val[2:], 2)
         if val.startswith('0o') or val.startswith('0O'):
-            return int(val, 8)
+            return int(val[2:], 8)
         try:
             return int(val)
         except ValueError:
             return int(float(val))
     
+    def _parse_pl_instruction(self, line: str, idx: int, line_num: int, fname: str) -> None:
+        parts = line.split()
+        if not parts:
+            return
+        
+        keyword = parts[0].lower()
+        
+        if keyword in Constants.PL_KEYWORDS:
+            opcode = Constants.PL_KEYWORDS[keyword]
+        else:
+            opcode = keyword.upper()
+            if opcode not in Constants.OPCODE_NAME_TO_ENUM:
+                if keyword in self.labels:
+                    self._parse_pl_instruction(f"{line} {keyword}", idx, line_num, fname)
+                    return
+                if keyword in self.data_labels:
+                    self._parse_pl_instruction(f"{line} {keyword}", idx, line_num, fname)
+                    return
+                raise AssemblerError(line, f"Unknown instruction or keyword: {keyword}", line_num, fname)
+        
+        expected_args = Constants.ARG_COUNTS.get(Constants.OPCODE_NAME_TO_ENUM.get(opcode), -1)
+        args = []
+        i = 1
+        
+        while i < len(parts):
+            arg = parts[i]
+            
+            if re.match(r'^[xX]([0-9]|[12][0-9]|3[01])$', arg):
+                idx_reg = int(arg[1:])
+                args.append(('reg', idx_reg if idx_reg != 31 else 31))
+            elif re.match(r'^[rR]([0-9]|[12][0-9]|3[01])$', arg):
+                idx_reg = int(arg[1:])
+                args.append(('reg', idx_reg if idx_reg != 31 else 31))
+            elif re.match(r'^[wW]([0-9]|[12][0-9]|3[01])$', arg):
+                args.append(('reg', int(arg[1:])))
+            elif re.match(r'^[vV]([0-9]|[12][0-9]|3[01])$', arg):
+                args.append(('vec', int(arg[1:])))
+            elif re.match(r'^[vV]([0-9]|[12][0-9]|3[01])\.([0-3])$', arg):
+                m = re.match(r'^[vV]([0-9]|[12][0-9]|3[01])\.([0-3])$', arg)
+                args.append(('vec_lane', int(m.group(1)), int(m.group(2))))
+            elif arg.upper() in Constants.CONDITIONS:
+                args.append(('cond', arg.upper()))
+            elif re.match(r'^-?\d+\.\d+$', arg):
+                args.append(('float', float(arg)))
+            elif arg.startswith('[') and arg.endswith(']'):
+                inner = arg[1:-1]
+                if re.match(r'^[xXrR]([0-9]|[12][0-9]|3[01])$', inner):
+                    args.append(('mem', int(inner[1:])))
+                else:
+                    try:
+                        args.append(('mem', self.parse_immediate(inner)))
+                    except ValueError:
+                        args.append(('mem', inner))
+            elif arg.startswith('#'):
+                try:
+                    args.append(('imm', self.parse_immediate(arg[1:])))
+                except ValueError:
+                    args.append(('imm', arg[1:]))
+            elif re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', arg):
+                if arg in self.labels:
+                    args.append(('imm', self.labels[arg]))
+                elif arg in self.data_labels:
+                    args.append(('imm', self.data_labels[arg]))
+                else:
+                    args.append(('label', arg))
+            elif re.match(r'^-?\d+$', arg):
+                args.append(('imm', int(arg)))
+            elif arg.startswith('0x') or arg.startswith('0X'):
+                args.append(('imm', int(arg, 16)))
+            elif arg.startswith('0b') or arg.startswith('0B'):
+                args.append(('imm', int(arg[2:], 2)))
+            elif arg.startswith('0o') or arg.startswith('0O'):
+                args.append(('imm', int(arg[2:], 8)))
+            else:
+                raise AssemblerError(line, f"Unable to parse operand: {arg}", line_num, fname)
+            
+            i += 1
+        
+        if expected_args >= 0 and self.config.strict_mode:
+            actual_args = len(args)
+            if expected_args != actual_args:
+                raise AssemblerError(line, f"Argument count mismatch: expected {expected_args}, got {actual_args}", line_num, fname)
+        
+        resolved_args = []
+        for arg_item in args:
+            if len(arg_item) == 2:
+                arg_type, arg_val = arg_item
+                if arg_type == 'label':
+                    if arg_val in self.labels:
+                        resolved_args.append(('imm', self.labels[arg_val]))
+                    elif arg_val in self.data_labels:
+                        resolved_args.append(('imm', self.data_labels[arg_val]))
+                    else:
+                        resolved_args.append(('imm', 0))
+                else:
+                    resolved_args.append((arg_type, arg_val))
+            else:
+                resolved_args.append(arg_item)
+        
+        self.instructions.append((opcode, resolved_args))
+    
+    def assemble(self, filename: str) -> None:
+        self.logger.info(f"Assembling: {filename}")
+        self.assemble_pl(filename)
+
+    # ==================== Binary Operations ====================
+    
+    def load_bin(self, filename: str) -> None:
+        with open(filename, 'rb') as f:
+            magic = f.read(5)
+            if magic != Constants.MAGIC_NUMBER:
+                raise CPUSimulatorError("Invalid binary file")
+            version = struct.unpack('<B', f.read(1))[0]
+            mem_size = struct.unpack('<I', f.read(4))[0]
+            instr_count = struct.unpack('<I', f.read(4))[0]
+            entry_pc = struct.unpack('<I', f.read(4))[0]
+            f.read(16)
+            for i in range(mem_size):
+                self.memory.write_byte(i, struct.unpack('<B', f.read(1))[0])
+            self.instructions = []
+            for _ in range(instr_count):
+                data = f.read(Constants.INSTR_SIZE)
+                if len(data) < Constants.INSTR_SIZE:
+                    break
+            self.pc = entry_pc
+    
+    def save_bin(self, filename: str) -> None:
+        with open(filename, 'wb') as f:
+            f.write(Constants.MAGIC_NUMBER)
+            f.write(struct.pack('<B', Constants.VERSION))
+            f.write(struct.pack('<I', len(self.memory)))
+            f.write(struct.pack('<I', len(self.instructions)))
+            f.write(struct.pack('<I', self.pc))
+            f.write(b'\x00' * 16)
+            for i in range(len(self.memory)):
+                f.write(struct.pack('<B', self.memory.read_byte(i)))
+            
+            for opcode, args in self.instructions:
+                op_idx = Constants.OPCODE_NAME_TO_ENUM.get(opcode, 0xFF)
+                argc = len(args)
+                f.write(struct.pack('<BBBBIBBBI', op_idx, argc, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        
+        self.logger.info(f"Binary saved to {filename}")
+
+    # ==================== Value Helpers ====================
+    
+    def get_val(self, op: Tuple[str, int]) -> Union[int, float]:
+        op_type, value = op
+        if op_type == 'reg':
+            if value == 31:
+                return 0
+            return self.regs.read(value)
+        elif op_type == 'vec':
+            return self.vec_regs.read_vector(value)[0]
+        elif op_type == 'float':
+            return float(value)
+        elif op_type == 'mem':
+            return self.memory.read_byte(value)
+        elif op_type == 'cond':
+            return 1 if self.get_condition(value) else 0
+        else:
+            return value
+    
+    def get_condition(self, cond: str) -> bool:
+        cond_map = {
+            'EQ': self.pstate['Z'],
+            'NE': not self.pstate['Z'],
+            'CS': self.pstate['C'],
+            'CC': not self.pstate['C'],
+            'MI': self.pstate['N'],
+            'PL': not self.pstate['N'],
+            'VS': self.pstate['V'],
+            'VC': not self.pstate['V'],
+            'HI': self.pstate['C'] and not self.pstate['Z'],
+            'LS': not self.pstate['C'] or self.pstate['Z'],
+            'GE': self.pstate['N'] == self.pstate['V'],
+            'LT': self.pstate['N'] != self.pstate['V'],
+            'GT': not self.pstate['Z'] and (self.pstate['N'] == self.pstate['V']),
+            'LE': self.pstate['Z'] or (self.pstate['N'] != self.pstate['V']),
+            'AL': True,
+            'NV': False
+        }
+        return cond_map.get(cond.upper(), False)
+    
+    def add_breakpoint(self, addr: int) -> None:
+        self.breakpoints.add(addr)
+        self.logger.info(f"Breakpoint set at PC={addr:#x}")
+    
+    def remove_breakpoint(self, addr: int) -> None:
+        self.breakpoints.discard(addr)
+        self.logger.info(f"Breakpoint removed at PC={addr:#x}")
+    
+    def _set_pstate(self, result: int, carry: bool = False, overflow: bool = False) -> None:
+        self.pstate['Z'] = (result == 0)
+        self.pstate['N'] = (result < 0)
+        self.pstate['C'] = carry
+        self.pstate['V'] = overflow
+    
+    def _check_stack(self, size: int = 1) -> None:
+        if self.sp - size < 0:
+            self._extend_stack(size)
+            return
+        
+        if self.sp - size < self.config.mem_size // 4:
+            self.logger.warning(f"Stack approaching heap region (sp={self.sp}, size={size})")
+    
+    def _extend_stack(self, needed: int) -> None:
+        new_size = max(self.config.mem_size * 2, self.sp + needed + 1024)
+        self.logger.info(f"Extending stack from {self.config.mem_size} to {new_size} bytes")
+        self.memory._memory = bytearray(new_size)
+        self.memory._size = new_size
+        self.memory._view = memoryview(self.memory._memory)
+        self.config.mem_size = new_size
+
     # ==================== Instruction Handlers ====================
     
     def _exec_mov(self, args):
@@ -2741,7 +3261,6 @@ class CPU:
         self.memory.write_dword(addr, self.regs.read(rs))
         return True
     
-    # ARM64 handlers
     def _exec_adds(self, args):
         rd, rn, oper2 = args[0][1], args[1][1], args[2]
         val1 = self.regs.read(rn)
@@ -2821,7 +3340,6 @@ class CPU:
     def _exec_nop(self, args):
         return True
     
-    # Floating point handlers
     def _exec_fadd(self, args):
         rd, rn, rm = args[0][1], args[1][1], args[2][1]
         val1 = self.vec_regs.read_scalar(rn)
@@ -2882,7 +3400,6 @@ class CPU:
         self.memory.write_float(address, value)
         return True
     
-    # Vector handlers
     def _exec_vadd(self, args):
         rd, rn, rm = args[0][1], args[1][1], args[2][1]
         vec1 = self.vec_regs.read_vector(rn)
@@ -2923,7 +3440,7 @@ class CPU:
         rd, addr = args[0][1], args[1]
         address = self.get_val(addr)
         self.stats.record_memory_read()
-        data = self.memory._memory[address:address + 16]
+        data = self.memory.read_block(address, 16)
         values = struct.unpack('ffff', data)
         self.vec_regs.write_vector(rd, list(values))
         return True
@@ -2934,10 +3451,9 @@ class CPU:
         self.stats.record_memory_write()
         values = self.vec_regs.read_vector(rs)
         data = struct.pack('ffff', *values)
-        self.memory._memory[address:address + 16] = data
+        self.memory.write_block(address, data)
         return True
     
-    # RISC-V handlers
     def _exec_lb(self, args):
         rd, addr = args[0][1], args[1]
         address = self.get_val(addr)
@@ -3071,37 +3587,55 @@ class CPU:
     
     def _exec_beq(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if self.regs.read(rs1) == self.regs.read(rs2):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = self.regs.read(rs1) == self.regs.read(rs2)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
     def _exec_bne(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if self.regs.read(rs1) != self.regs.read(rs2):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = self.regs.read(rs1) != self.regs.read(rs2)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
     def _exec_blt(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if self.regs.read(rs1) < self.regs.read(rs2):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = self.regs.read(rs1) < self.regs.read(rs2)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
     def _exec_bge(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if self.regs.read(rs1) >= self.regs.read(rs2):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = self.regs.read(rs1) >= self.regs.read(rs2)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
     def _exec_bltu(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if (self.regs.read(rs1) & 0xFFFFFFFF) < (self.regs.read(rs2) & 0xFFFFFFFF):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = (self.regs.read(rs1) & 0xFFFFFFFF) < (self.regs.read(rs2) & 0xFFFFFFFF)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
     def _exec_bgeu(self, args):
         rs1, rs2, label = args[0][1], args[1][1], args[2]
-        if (self.regs.read(rs1) & 0xFFFFFFFF) >= (self.regs.read(rs2) & 0xFFFFFFFF):
+        predicted = self.stats.performance_counters.branch_predictor.predict(self.pc)
+        taken = (self.regs.read(rs1) & 0xFFFFFFFF) >= (self.regs.read(rs2) & 0xFFFFFFFF)
+        self.stats.record_branch(self.pc, taken, predicted)
+        if taken:
             self.pc = self.get_val(label)
         return True
     
@@ -3130,653 +3664,47 @@ class CPU:
         imm_val = self.get_val(imm) if args[1][0] != 'imm' else args[1][1]
         self.regs.write(rd, self.pc + ((imm_val & 0xFFFFF) << 12), self.pc)
         return True
-    
-    def _set_pstate(self, result: int, carry: bool = False, overflow: bool = False) -> None:
-        self.pstate['Z'] = (result == 0)
-        self.pstate['N'] = (result < 0)
-        self.pstate['C'] = carry
-        self.pstate['V'] = overflow
-    
-    def _check_stack(self, size: int = 1) -> None:
-        """Check if stack has enough space"""
-        if self.sp - size < 0:
-            raise ExecutionError("Stack overflow")
-        if self.sp - size < self.config.mem_size // 4:
-            self.logger.warning("Stack approaching heap region")
-    
-    def _compile_and_build(self, filename: str) -> None:
-        """Compile CIN file and build executable"""
-        self.logger.info(f"Compiling CIN: {filename}")
-        
-        compiler = CINCompiler(self.console)
-        
-        try:
-            cpp_file, cpp_code = compiler.compile(filename)
-            self.logger.info(f"C++ generated: {cpp_file}")
-            
-            if self.config.compile_only:
-                self.logger.info("Compilation complete (--compile-only)")
-                return
-            
-            output_bin = self.config.output_file or os.path.splitext(filename)[0]
-            if sys.platform == 'win32' and not output_bin.endswith('.exe'):
-                output_bin += '.exe'
-            
-            self._compile_cpp(cpp_file, output_bin)
-            
-        except Exception as e:
-            self.logger.error(f"Compilation failed: {e}")
-            raise
-    
-    def _compile_cpp(self, cpp_file: str, output_file: str) -> None:
-        """Compile C++ to binary"""
-        compiler = 'g++' if sys.platform != 'win32' else 'g++.exe'
-        optimize = f'-O{self.config.optimize}' if self.config.optimize > 0 else ''
-        target = f'-march={self.config.target}' if self.config.target != 'native' else ''
-        
-        cmd = [compiler, cpp_file, '-o', output_file, '-std=c++17']
-        if optimize:
-            cmd.append(optimize)
-        if target:
-            cmd.append(target)
-        
-        self.logger.info(f"Executing: {' '.join(cmd)}")
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                self.logger.error(f"Compilation failed:\n{result.stderr}")
-                raise CPUSimulatorError(f"Compilation failed: {result.stderr}")
-            
-            self.logger.info(f"Build successful: {output_file}")
-            
-        except FileNotFoundError:
-            raise CPUSimulatorError(f"Compiler '{compiler}' not found")
-        except Exception as e:
-            raise CPUSimulatorError(f"Compilation error: {e}")
-    
-    def _load_compiled(self, filename: str) -> None:
-        """Load compiled CIN file for simulation"""
-        base = os.path.splitext(filename)[0]
-        pl_file = base + '.pl'
-        asm_file = base + '.asm'
-        
-        if os.path.exists(pl_file):
-            self.assemble_pl(pl_file)
-        elif os.path.exists(asm_file):
-            self.assemble(asm_file)
-        else:
-            raise CPUSimulatorError(f"No source file found: {base}.pl or {base}.asm")
-    
-    def load_crom(self, crom_file: str) -> None:
-        """Load .crom file with support for new format"""
-        if not os.path.exists(crom_file):
-            self._create_default_crom(crom_file)
-            return
-        
-        with open(crom_file, 'rb') as f:
-            data = f.read()
-        
-        if len(data) < 8:
-            raise CPUSimulatorError(f".crom file too short: {len(data)} bytes")
-        
-        magic = data[:4]
-        if magic == Constants.CROM_MAGIC:
-            version = data[4]
-            
-            if version == 3:  # New compressed format
-                if len(data) < 16:
-                    raise CPUSimulatorError(".crom header incomplete")
-                
-                # Read header
-                mem_size = struct.unpack('<I', data[5:9])[0]
-                flags = data[9]
-                compressed = bool(flags & 0x01)
-                checksum = data[10:14]
-                reserved = data[14:16]
-                
-                # Read data
-                offset = 16
-                if compressed:
-                    # Decompress data
-                    try:
-                        decompressed = zlib.decompress(data[offset:])
-                        if len(decompressed) != mem_size:
-                            self.logger.warning(f"Decompressed size mismatch: {len(decompressed)} vs {mem_size}")
-                        bytes_data = decompressed[:min(mem_size, len(decompressed))]
-                    except zlib.error as e:
-                        raise CPUSimulatorError(f"Failed to decompress .crom: {e}")
-                else:
-                    bytes_data = data[offset:offset+mem_size]
-                
-                # Load into memory
-                for i, byte in enumerate(bytes_data):
-                    if i < len(self.memory):
-                        self.memory.write_byte(i, byte)
-                
-                self.logger.info(f"Loaded .crom v3: {len(bytes_data)} bytes, compressed={compressed}")
-                
-            elif version == 1 or version == 2:  # Legacy format
-                if len(data) < 10:
-                    raise CPUSimulatorError(".crom header incomplete")
-                mem_size = struct.unpack('<I', data[5:9])[0]
-                bytes_data = data[9:9+mem_size]
-                
-                for i, byte in enumerate(bytes_data):
-                    if i < len(self.memory):
-                        self.memory.write_byte(i, byte)
-                
-                self.logger.info(f"Loaded .crom v{version}: {len(bytes_data)} bytes")
-            else:
-                raise CPUSimulatorError(f"Unsupported .crom version: {version}")
-        else:
-            # Legacy format (no magic)
-            mem_size = struct.unpack('<I', data[:4])[0]
-            bytes_data = data[4:4+mem_size]
-            
-            for i, byte in enumerate(bytes_data):
-                if i < len(self.memory):
-                    self.memory.write_byte(i, byte)
-            
-            self.logger.info(f"Loaded .crom (legacy): {len(bytes_data)} bytes")
-    
-    def _create_default_crom(self, crom_file: str) -> None:
-        self.save_crom(crom_file)
-        self.logger.info(f"Created default .crom: {crom_file}")
-    
-    def save_crom(self, crom_file: Optional[str] = None) -> None:
-        """Save .crom file with compression support"""
-        if crom_file is None:
-            crom_file = self.crom_file
-        
-        # Flush cache first
-        self.cache.flush()
-        
-        # Get memory snapshot
-        mem_data = bytes(self.memory._memory)
-        
-        # Build header
-        flags = 0
-        if self.config.compress_crom:
-            flags |= 0x01  # Compression flag
-        
-        # Compress data if enabled
-        data_to_write = mem_data
-        if self.config.compress_crom:
-            data_to_write = zlib.compress(mem_data, level=6)
-        
-        # Write file
-        with open(crom_file, 'wb') as f:
-            f.write(Constants.CROM_MAGIC)
-            f.write(struct.pack('<B', Constants.CROM_VERSION))
-            f.write(struct.pack('<I', len(mem_data)))
-            f.write(struct.pack('<B', flags))
-            # Simple checksum (CRC32 of compressed data)
-            checksum = zlib.crc32(data_to_write) & 0xFFFFFFFF
-            f.write(struct.pack('<I', checksum))
-            f.write(b'\x00\x00')  # Reserved
-            f.write(data_to_write)
-        
-        self.logger.info(f".crom saved to {crom_file} (v{Constants.CROM_VERSION}, compressed={self.config.compress_crom})")
-    
-    def assemble_pl(self, filename: str) -> None:
-        """Assemble .pl file"""
-        self.pl_source = []
-        raw_lines = []
-        
-        abs_path = os.path.abspath(filename)
-        dir_path = os.path.dirname(abs_path)
-        
-        if not os.path.exists(abs_path):
-            raise CPUSimulatorError(f"File '{filename}' not found")
-        
-        with open(abs_path, 'r', encoding='utf-8') as f:
-            for line_num, raw in enumerate(f, 1):
-                line = raw
-                if '#' in line:
-                    line = line[:line.index('#')]
-                if '//' in line:
-                    line = line[:line.index('//')]
-                line = line.strip()
-                
-                if not line:
-                    continue
-                
-                if line.startswith('#include'):
-                    parts = line.split()
-                    if len(parts) < 2:
-                        raise AssemblerError(line, "#include format error", line_num, filename)
-                    inc_file = parts[1].strip('"<>')
-                    inc_path = os.path.join(dir_path, inc_file)
-                    if not os.path.exists(inc_path):
-                        raise AssemblerError(line, f"Include file '{inc_file}' not found", line_num, filename)
-                    sub_lines = self._preprocess_pl(inc_path, set())
-                    raw_lines.extend(sub_lines)
-                else:
-                    raw_lines.append((line, line_num, filename))
-                    self.pl_source.append(line)
-        
-        self._assemble_pl_lines(raw_lines, filename)
-        self.logger.info(f"PL assembly successful: {len(self.instructions)} instructions")
-        
-        # Validate instructions
-        self._validate_instructions()
-    
-    def _preprocess_pl(self, filename: str, loaded: Set[str]) -> List[Tuple[str, int, str]]:
-        if filename in loaded:
-            return []
-        
-        loaded.add(filename)
-        abs_path = os.path.abspath(filename)
-        dir_path = os.path.dirname(abs_path)
-        
-        if not os.path.exists(abs_path):
-            raise CPUSimulatorError(f"File '{filename}' not found")
-        
-        lines = []
-        with open(abs_path, 'r', encoding='utf-8') as f:
-            for line_num, raw in enumerate(f, 1):
-                line = raw
-                if '#' in line:
-                    line = line[:line.index('#')]
-                if '//' in line:
-                    line = line[:line.index('//')]
-                line = line.strip()
-                
-                if not line:
-                    continue
-                
-                if line.startswith('#include'):
-                    parts = line.split()
-                    if len(parts) < 2:
-                        raise AssemblerError(line, "#include format error", line_num, filename)
-                    inc_file = parts[1].strip('"<>')
-                    inc_path = os.path.join(dir_path, inc_file)
-                    if not os.path.exists(inc_path):
-                        raise AssemblerError(line, f"Include file '{inc_file}' not found", line_num, filename)
-                    lines.extend(self._preprocess_pl(inc_path, loaded))
-                else:
-                    lines.append((line, line_num, filename))
-        
-        return lines
-    
-    def _validate_instructions(self) -> None:
-        """Validate all instructions after assembly"""
-        for pc, (opcode, args) in enumerate(self.instructions):
-            expected = Constants.ARG_COUNTS.get(
-                Constants.OPCODE_NAME_TO_ENUM.get(opcode), -1
-            )
-            if expected >= 0 and len(args) != expected:
-                self.logger.warning(f"Instruction {opcode} at PC={pc} has {len(args)} args, expected {expected}")
-            
-            # Validate register ranges
-            for arg in args:
-                if arg[0] == 'reg' and arg[1] > 31:
-                    self.logger.warning(f"Invalid register {arg[1]} at PC={pc}")
-                if arg[0] == 'imm' and abs(arg[1]) > 0xFFFFFFFF:
-                    self.logger.warning(f"Immediate value too large at PC={pc}: {arg[1]}")
-    
-    def _assemble_pl_lines(self, lines: List[Tuple[str, int, str]], filename: str) -> None:
-        self.instructions = []
-        self.labels = {}
-        self.data_labels = {}
-        
-        data_addr = 0
-        instr_index = 0
-        current_section = 'TEXT'
-        parsed_lines = []
-        
-        i = 0
-        while i < len(lines):
-            line, line_num, fname = lines[i]
-            
-            if line.upper() in ['.TEXT', '.CODE', 'TEXT', 'CODE']:
-                current_section = 'TEXT'
-                i += 1
-                continue
-            elif line.upper() in ['.DATA', 'DATA']:
-                current_section = 'DATA'
-                i += 1
-                continue
-            
-            if ':' in line and not line.startswith('.'):
-                parts = line.split(':', 1)
-                label = parts[0].strip()
-                rest = parts[1].strip() if len(parts) > 1 else ''
-                
-                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', label):
-                    raise AssemblerError(line, f"Invalid label: {label}", line_num, fname)
-                
-                if current_section == 'TEXT':
-                    self.labels[label] = instr_index
-                else:
-                    self.data_labels[label] = data_addr
-                
-                if rest:
-                    line = rest
-                else:
-                    i += 1
-                    continue
-            
-            if current_section == 'DATA':
-                self._handle_data_directive_pl(line, line_num, fname, data_addr)
-                i += 1
-                continue
-            
-            if line:
-                parsed_lines.append((line, instr_index, line_num, fname))
-                instr_index += 1
-            
-            i += 1
-        
-        for line, idx, line_num, fname in parsed_lines:
-            self._parse_pl_instruction(line, idx, line_num, fname)
-    
-    def _handle_data_directive_pl(self, line: str, line_num: int, fname: str, data_addr: int) -> None:
-        parts = line.split()
-        if not parts:
-            return
-        
-        directive = parts[0].upper()
-        if directive not in Constants.DATA_DIRECTIVES:
-            if directive in ['BYTE', 'byte']:
-                directive = 'DB'
-            elif directive in ['WORD', 'word']:
-                directive = 'DW'
-            elif directive in ['DWORD', 'dword']:
-                directive = 'DD'
-            elif directive in ['QWORD', 'qword']:
-                directive = 'DQ'
-            else:
-                raise AssemblerError(line, f"Unknown data directive: {directive}", line_num, fname)
-        
-        values = []
-        for val_str in ' '.join(parts[1:]).split(','):
-            val_str = val_str.strip()
-            if val_str.startswith('0x'):
-                values.append(int(val_str, 16))
-            elif val_str.startswith('0b'):
-                values.append(int(val_str[2:], 2))
-            elif val_str.startswith('0o'):
-                values.append(int(val_str[2:], 8))
-            elif val_str.startswith("'") and val_str.endswith("'"):
-                values.append(ord(val_str[1]))
-            elif val_str.startswith('"') and val_str.endswith('"'):
-                for ch in val_str[1:-1]:
-                    values.append(ord(ch))
-                values.append(0)
-            else:
-                try:
-                    values.append(self.parse_immediate(val_str))
-                except ValueError:
-                    raise AssemblerError(line, f"Invalid data value: {val_str}", line_num, fname)
-        
-        for val in values:
-            if directive == 'DB':
-                if data_addr < len(self.memory):
-                    self.memory.write_byte(data_addr, val & 0xFF)
-                    data_addr += 1
-            elif directive == 'DW':
-                if data_addr + 1 < len(self.memory):
-                    self.memory.write_word(data_addr, val & 0xFFFF)
-                    data_addr += 2
-            elif directive == 'DD':
-                if data_addr + 3 < len(self.memory):
-                    self.memory.write_dword(data_addr, val)
-                    data_addr += 4
-    
-    def _parse_pl_instruction(self, line: str, idx: int, line_num: int, fname: str) -> None:
-        parts = line.split()
-        if not parts:
-            return
-        
-        keyword = parts[0].lower()
-        
-        if keyword in Constants.PL_KEYWORDS:
-            opcode = Constants.PL_KEYWORDS[keyword]
-        else:
-            opcode = keyword.upper()
-            if opcode not in Constants.OPCODE_NAME_TO_ENUM:
-                if keyword in self.labels:
-                    self._parse_pl_instruction(f"{line} {keyword}", idx, line_num, fname)
-                    return
-                if keyword in self.data_labels:
-                    self._parse_pl_instruction(f"{line} {keyword}", idx, line_num, fname)
-                    return
-                raise AssemblerError(line, f"Unknown instruction or keyword: {keyword}", line_num, fname)
-        
-        expected_args = Constants.ARG_COUNTS.get(Constants.OPCODE_NAME_TO_ENUM.get(opcode), -1)
-        args = []
-        i = 1
-        
-        while i < len(parts):
-            arg = parts[i]
-            
-            if re.match(r'^[xX]([0-9]|[12][0-9]|3[01])$', arg):
-                idx_reg = int(arg[1:])
-                args.append(('reg', idx_reg if idx_reg != 31 else 31))
-            elif re.match(r'^[rR]([0-9]|[12][0-9]|3[01])$', arg):
-                idx_reg = int(arg[1:])
-                args.append(('reg', idx_reg if idx_reg != 31 else 31))
-            elif re.match(r'^[wW]([0-9]|[12][0-9]|3[01])$', arg):
-                args.append(('reg', int(arg[1:])))
-            elif re.match(r'^[vV]([0-9]|[12][0-9]|3[01])$', arg):
-                args.append(('vec', int(arg[1:])))
-            elif re.match(r'^[vV]([0-9]|[12][0-9]|3[01])\.([0-3])$', arg):
-                m = re.match(r'^[vV]([0-9]|[12][0-9]|3[01])\.([0-3])$', arg)
-                args.append(('vec_lane', int(m.group(1)), int(m.group(2))))
-            elif arg.upper() in Constants.CONDITIONS:
-                args.append(('cond', arg.upper()))
-            elif re.match(r'^-?\d+\.\d+$', arg):
-                args.append(('float', float(arg)))
-            elif arg.startswith('[') and arg.endswith(']'):
-                inner = arg[1:-1]
-                if re.match(r'^[xXrR]([0-9]|[12][0-9]|3[01])$', inner):
-                    args.append(('mem', int(inner[1:])))
-                else:
-                    try:
-                        args.append(('mem', self.parse_immediate(inner)))
-                    except ValueError:
-                        args.append(('mem', inner))
-            elif arg.startswith('#'):
-                try:
-                    args.append(('imm', self.parse_immediate(arg[1:])))
-                except ValueError:
-                    args.append(('imm', arg[1:]))
-            elif re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', arg):
-                if arg in self.labels:
-                    args.append(('imm', self.labels[arg]))
-                elif arg in self.data_labels:
-                    args.append(('imm', self.data_labels[arg]))
-                else:
-                    args.append(('label', arg))
-            elif re.match(r'^-?\d+$', arg):
-                args.append(('imm', int(arg)))
-            elif arg.startswith('0x') or arg.startswith('0X'):
-                args.append(('imm', int(arg, 16)))
-            elif arg.startswith('0b') or arg.startswith('0B'):
-                args.append(('imm', int(arg[2:], 2)))
-            elif arg.startswith('0o') or arg.startswith('0O'):
-                args.append(('imm', int(arg[2:], 8)))
-            else:
-                raise AssemblerError(line, f"Unable to parse operand: {arg}", line_num, fname)
-            
-            i += 1
-        
-        if expected_args >= 0 and self.config.strict_mode:
-            actual_args = len(args)
-            if expected_args != actual_args:
-                raise AssemblerError(line, f"Argument count mismatch: expected {expected_args}, got {actual_args}", line_num, fname)
-        
-        resolved_args = []
-        for arg_item in args:
-            if len(arg_item) == 2:
-                arg_type, arg_val = arg_item
-                if arg_type == 'label':
-                    if arg_val in self.labels:
-                        resolved_args.append(('imm', self.labels[arg_val]))
-                    elif arg_val in self.data_labels:
-                        resolved_args.append(('imm', self.data_labels[arg_val]))
-                    else:
-                        resolved_args.append(('imm', 0))
-                else:
-                    resolved_args.append((arg_type, arg_val))
-            else:
-                resolved_args.append(arg_item)
-        
-        self.instructions.append((opcode, resolved_args))
-    
-    def assemble(self, filename: str) -> None:
-        """Assemble .asm file"""
-        self.logger.info(f"Assembling: {filename}")
-        self.assemble_pl(filename)
-    
-    def load_bin(self, filename: str) -> None:
-        """Load binary .bin file"""
-        with open(filename, 'rb') as f:
-            magic = f.read(5)
-            if magic != Constants.MAGIC_NUMBER:
-                raise CPUSimulatorError("Invalid binary file")
-            version = struct.unpack('<B', f.read(1))[0]
-            mem_size = struct.unpack('<I', f.read(4))[0]
-            instr_count = struct.unpack('<I', f.read(4))[0]
-            entry_pc = struct.unpack('<I', f.read(4))[0]
-            f.read(16)
-            for i in range(mem_size):
-                self.memory.write_byte(i, struct.unpack('<B', f.read(1))[0])
-            self.instructions = []
-            for _ in range(instr_count):
-                data = f.read(Constants.INSTR_SIZE)
-                if len(data) < Constants.INSTR_SIZE:
-                    break
-            self.pc = entry_pc
-    
-    def save_bin(self, filename: str) -> None:
-        """Save binary .bin file"""
-        with open(filename, 'wb') as f:
-            f.write(Constants.MAGIC_NUMBER)
-            f.write(struct.pack('<B', Constants.VERSION))
-            f.write(struct.pack('<I', len(self.memory)))
-            f.write(struct.pack('<I', len(self.instructions)))
-            f.write(struct.pack('<I', self.pc))
-            f.write(b'\x00' * 16)
-            for i in range(len(self.memory)):
-                f.write(struct.pack('<B', self.memory.read_byte(i)))
-            for opcode, args in self.instructions:
-                op_idx = Constants.OPCODE_NAME_TO_ENUM.get(opcode, 0xFF)
-                argc = len(args)
-                f.write(struct.pack('<BBBBIBBBI', op_idx, argc, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-        self.logger.info(f"Binary saved to {filename}")
-    
-    def get_val(self, op: Tuple[str, int]) -> Union[int, float]:
-        op_type, value = op
-        if op_type == 'reg':
-            if value == 31:
-                return 0
-            return self.regs.read(value)
-        elif op_type == 'vec':
-            return self.vec_regs.read_vector(value)[0]
-        elif op_type == 'float':
-            return float(value)
-        elif op_type == 'mem':
-            return self.memory.read_byte(value)
-        elif op_type == 'cond':
-            return 1 if self.get_condition(value) else 0
-        else:
-            return value
-    
-    def get_float_val(self, op: Tuple[str, int]) -> float:
-        return float(self.get_val(op))
-    
-    def get_condition(self, cond: str) -> bool:
-        cond_map = {
-            'EQ': self.pstate['Z'],
-            'NE': not self.pstate['Z'],
-            'CS': self.pstate['C'],
-            'CC': not self.pstate['C'],
-            'MI': self.pstate['N'],
-            'PL': not self.pstate['N'],
-            'VS': self.pstate['V'],
-            'VC': not self.pstate['V'],
-            'HI': self.pstate['C'] and not self.pstate['Z'],
-            'LS': not self.pstate['C'] or self.pstate['Z'],
-            'GE': self.pstate['N'] == self.pstate['V'],
-            'LT': self.pstate['N'] != self.pstate['V'],
-            'GT': not self.pstate['Z'] and (self.pstate['N'] == self.pstate['V']),
-            'LE': self.pstate['Z'] or (self.pstate['N'] != self.pstate['V']),
-            'AL': True,
-            'NV': False
-        }
-        return cond_map.get(cond.upper(), False)
-    
-    def add_breakpoint(self, addr: int) -> None:
-        """Add a breakpoint at the given address"""
-        self.breakpoints.add(addr)
-        self.logger.info(f"Breakpoint set at PC={addr:#x}")
-    
-    def remove_breakpoint(self, addr: int) -> None:
-        """Remove a breakpoint at the given address"""
-        self.breakpoints.discard(addr)
-        self.logger.info(f"Breakpoint removed at PC={addr:#x}")
-    
+
+    # ==================== Execution ====================
+
     def execute(self, opcode: str, args: List[Tuple[str, int]]) -> bool:
-        """Execute instruction using dispatch table"""
         self.pc += 1
         
-        # Use fast dispatch if available
         handler = self._fast_dispatch.get(opcode)
         if handler:
             result = handler(args)
             self.stats.record_instruction(opcode)
-            
-            if self.profiler:
-                self.profiler.record_instruction(opcode)
-            
             return result
         
-        # Fall back to full dispatch table
         handler = self._dispatch_table.get(opcode)
         if handler:
             result = handler(args)
             self.stats.record_instruction(opcode)
-            
-            if self.profiler:
-                self.profiler.record_instruction(opcode)
-            
             return result
         else:
             raise ExecutionError(f"Unimplemented instruction: {opcode}")
     
     def execute_with_jit(self) -> bool:
-        """Execute using JIT compilation for the current block"""
         if not self.jit:
             return self.execute_fallback()
         
         pc = self.pc
         
-        # Check breakpoints
         if pc in self.breakpoints:
-            self.console.print(f"[yellow]Breakpoint hit at PC={pc:#x}[/yellow]")
+            self.console.print(f"{Colors.colorize('Breakpoint hit', Colors.YELLOW)} at PC={pc:#x}")
             self.is_debugging = True
             self.debug_command_loop()
             return True
         
-        # Try to find compiled block starting at current PC
         if pc in self.jit.block_cache:
             start, end = self.jit.block_cache[pc]
             compiled_func = self.jit.compiled_blocks.get(pc)
             if compiled_func:
                 try:
-                    if self.profiler:
-                        self.profiler.start_block(f"JIT_{pc:#x}")
                     new_pc = compiled_func(self, self.memory, self.regs, self.vec_regs, self.pstate)
-                    if self.profiler:
-                        self.profiler.end_block(f"JIT_{pc:#x}")
                     if new_pc == -1:
                         return False
                     self.pc = new_pc
-                    # Record instructions for statistics
                     for i in range(start, end):
                         if i < len(self.instructions):
                             self.stats.record_instruction(self.instructions[i][0])
@@ -3786,7 +3714,6 @@ class CPU:
                     self.jit.invalidate_block(pc)
                     return self.execute_fallback()
         
-        # Compile a block of instructions
         end_pc = pc + 1
         for i in range(pc, min(pc + 32, len(self.instructions))):
             opcode, _ = self.instructions[i]
@@ -3797,11 +3724,7 @@ class CPU:
         compiled_func = self.jit.compile_block(pc, end_pc)
         if compiled_func:
             try:
-                if self.profiler:
-                    self.profiler.start_block(f"JIT_{pc:#x}")
                 new_pc = compiled_func(self, self.memory, self.regs, self.vec_regs, self.pstate)
-                if self.profiler:
-                    self.profiler.end_block(f"JIT_{pc:#x}")
                 if new_pc == -1:
                     return False
                 self.pc = new_pc
@@ -3813,7 +3736,6 @@ class CPU:
         return self.execute_fallback()
     
     def execute_fallback(self) -> bool:
-        """Fall back to interpreted execution"""
         if self.pc < 0 or self.pc >= len(self.instructions):
             return False
         
@@ -3824,13 +3746,15 @@ class CPU:
     def display_state(self, title: str = "CPU State", opcode: Optional[str] = None, 
                      args: Optional[List[Tuple[str, int]]] = None) -> None:
         self.console.clear()
-        self.console.rule(f"[bold magenta]{title}[/bold magenta]")
+        self.console.rule(f"{Colors.colorize(title, Colors.MAGENTA, True)}")
         
         if opcode:
-            pl_op = Constants.OPCODE_TO_PL.get(opcode, opcode.lower())
+            pl_op = Constants.PL_KEYWORDS.get(opcode.lower(), opcode.lower())
+            if not pl_op:
+                pl_op = opcode.lower()
             instr_text = f"{pl_op} " + " ".join(str(a) for a in args)
-            panel = Panel(f"[bold green]{instr_text}[/bold green]", title="Current Instruction", border_style="green", box=box.DOUBLE)
-            self.console.print(panel)
+            panel = Panel(instr_text, title="Current Instruction")
+            self.console.print(str(panel))
         
         reg_info = {
             'PSTATE': ' '.join(f"{k}={v}" for k, v in self.pstate.items()),
@@ -3839,27 +3763,30 @@ class CPU:
         }
         if self.breakpoints:
             reg_info['BREAKPOINTS'] = ', '.join(f"{b:#x}" for b in self.breakpoints)
-        self.regs.display_registers("General Registers (X0-X31)", reg_info)
+        self.regs.display_registers("General Registers (X0-X31)", reg_info, self.console)
         
         if self.config.show_vector_regs:
             self.vec_regs.display_vector_registers("Vector Registers (V0-V31)", self.console)
         
-        self.memory.display_memory("Memory (first 64 bytes)", 0, 64)
+        self.memory.display_memory("Memory (first 64 bytes)", 0, 64, self.console)
         
-        # Show cache stats if enabled
         if self.config.cache_size > 0:
             cache_stats = self.cache.get_stats()
             stats_text = f"Cache: {cache_stats['hits']} hits, {cache_stats['misses']} misses ({cache_stats['hit_rate']*100:.1f}% hit rate)"
-            self.console.print(f"[dim]{stats_text}[/dim]")
+            self.console.print(stats_text)
         
         self.console.rule()
     
     def debug_command_loop(self) -> None:
         self.is_debugging = True
-        self.console.print("[bold blue]Debug mode (type help for commands)[/bold blue]")
+        
+        if self.debug_server is None:
+            self.debug_server = DebugServer(self)
+        
+        self.console.print(f"{Colors.colorize('Debug mode (type help for commands)', Colors.BLUE, True)}")
         
         while self.is_debugging:
-            cmd = Prompt.ask("[yellow]dbg>[/yellow]").strip()
+            cmd = input(f"{Colors.colorize('dbg>', Colors.YELLOW)} ").strip()
             if not cmd:
                 continue
             
@@ -3872,9 +3799,22 @@ class CPU:
                 self.is_debugging = False
                 return
             elif command in ('step', 's'):
+                self.debug_server.record_state()
                 if not self.step():
                     self.is_debugging = False
                     return
+            elif command == 'reverse':
+                if self.debug_server.reverse_step():
+                    self.console.print(f"{Colors.colorize('Reversed one step', Colors.GREEN)}")
+                    self.display_state("Reverse Step")
+                else:
+                    self.console.print(f"{Colors.colorize('No history available', Colors.RED)}")
+            elif command == 'forward':
+                if self.debug_server.forward_step():
+                    self.console.print(f"{Colors.colorize('Forward one step', Colors.GREEN)}")
+                    self.display_state("Forward Step")
+                else:
+                    self.console.print(f"{Colors.colorize('No forward history available', Colors.RED)}")
             elif command in ('print', 'p'):
                 if len(parts) > 1:
                     target = parts[1]
@@ -3883,9 +3823,9 @@ class CPU:
                             idx = int(target[1:])
                             self.console.print(f"{target} = {self.regs.read(idx)}")
                         except:
-                            self.console.print("[red]Invalid register[/red]")
+                            self.console.print(f"{Colors.colorize('Invalid register', Colors.RED)}")
                     elif target == 'regs':
-                        self.regs.display_registers()
+                        self.regs.display_registers(console=self.console)
                     elif target == 'mem':
                         if len(parts) > 2:
                             try:
@@ -3893,67 +3833,113 @@ class CPU:
                                 value = self.memory.read_byte(addr)
                                 self.console.print(f"mem[{addr}] = {value} (0x{value:02X})")
                             except:
-                                self.console.print("[red]Invalid address[/red]")
+                                self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
                         else:
-                            self.memory.display_memory()
+                            self.memory.display_memory(console=self.console)
                     elif target == 'cache':
                         stats = self.cache.get_stats()
                         self.console.print(f"Cache stats: {stats}")
+                    elif target == 'history':
+                        self.console.print(f"History size: {len(self.debug_server.execution_history)}")
                     else:
-                        self.console.print("[red]Unknown target[/red]")
+                        self.console.print(f"{Colors.colorize('Unknown target', Colors.RED)}")
                 else:
-                    self.console.print("[red]Missing argument[/red]")
+                    self.console.print(f"{Colors.colorize('Missing argument', Colors.RED)}")
             elif command == 'break':
                 if len(parts) > 1:
                     try:
                         addr = int(parts[1])
-                        self.add_breakpoint(addr)
-                        self.console.print(f"[green]Breakpoint set at {addr:#x}[/green]")
+                        if len(parts) > 2:
+                            condition = ' '.join(parts[2:])
+                            self.debug_server.add_conditional_breakpoint(addr, condition)
+                            self.console.print(f"{Colors.colorize(f'Conditional breakpoint set at {addr:#x}: {condition}', Colors.GREEN)}")
+                        else:
+                            self.add_breakpoint(addr)
+                            self.console.print(f"{Colors.colorize(f'Breakpoint set at {addr:#x}', Colors.GREEN)}")
                     except:
-                        self.console.print("[red]Invalid address[/red]")
+                        self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
                 else:
-                    self.console.print("[red]Missing address[/red]")
+                    self.console.print(f"{Colors.colorize('Missing address', Colors.RED)}")
             elif command == 'delete':
                 if len(parts) > 1:
                     try:
                         addr = int(parts[1])
                         self.remove_breakpoint(addr)
-                        self.console.print(f"[green]Breakpoint removed at {addr:#x}[/green]")
+                        self.console.print(f"{Colors.colorize(f'Breakpoint removed at {addr:#x}', Colors.GREEN)}")
                     except:
-                        self.console.print("[red]Invalid address[/red]")
+                        self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
                 else:
-                    self.console.print("[red]Missing address[/red]")
+                    self.console.print(f"{Colors.colorize('Missing address', Colors.RED)}")
+            elif command == 'watch':
+                if len(parts) > 1:
+                    try:
+                        addr = int(parts[1])
+                        access = parts[2] if len(parts) > 2 else 'rw'
+                        self.memory.set_protection(addr, access)
+                        self.console.print(f"{Colors.colorize(f'Watchpoint set at {addr:#x} for {access}', Colors.GREEN)}")
+                    except:
+                        self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
+                else:
+                    self.console.print(f"{Colors.colorize('Missing address', Colors.RED)}")
             elif command == 'list':
+                self.console.print(f"{Colors.colorize('Breakpoints:', Colors.BOLD)}")
                 for addr in sorted(self.breakpoints):
                     self.console.print(f"  {addr:#x}")
+                for bp in self.debug_server.conditional_breakpoints:
+                    self.console.print(f"  {bp.address:#x} (cond: {bp.condition}, hits: {bp.hit_count})")
+            elif command == 'info':
+                if len(parts) > 1:
+                    if parts[1] == 'break':
+                        self.console.print(f"{Colors.colorize('Breakpoints:', Colors.BOLD)}")
+                        for addr in sorted(self.breakpoints):
+                            self.console.print(f"  {addr:#x}")
+                        for bp in self.debug_server.conditional_breakpoints:
+                            self.console.print(f"  {bp.address:#x} (cond: {bp.condition}, hits: {bp.hit_count})")
+                    elif parts[1] == 'regs':
+                        self.regs.display_registers(console=self.console)
+                    elif parts[1] == 'pc':
+                        self.console.print(f"PC: {self.pc:#x}")
+                    else:
+                        self.console.print(f"{Colors.colorize('Unknown info target', Colors.RED)}")
+                else:
+                    self.console.print(f"{Colors.colorize('Missing info target', Colors.RED)}")
             elif command in ('quit', 'q'):
                 sys.exit(0)
             else:
-                self.console.print("[red]Unknown command[/red]")
+                self.console.print(f"{Colors.colorize('Unknown command', Colors.RED)}")
     
     def _show_help(self) -> None:
-        help_text = """
-[bold cyan]Debug Commands:[/bold cyan]
-  [green]continue / c[/green]  - Continue execution
-  [green]step / s[/green]      - Single step
-  [green]break <addr>[/green]  - Set breakpoint at address
-  [green]delete <addr>[/green] - Remove breakpoint
-  [green]list[/green]          - List breakpoints
-  [green]print / p <target>[/green] - Print information
-    Supported: X0-X31, regs, mem [addr], cache
-  [green]quit / q[/green]      - Exit simulator
-  [green]help[/green]          - Show this help
+        help_text = f"""
+{Colors.colorize('Debug Commands:', Colors.CYAN, True)}
+  {Colors.colorize('continue / c', Colors.GREEN)}  - Continue execution
+  {Colors.colorize('step / s', Colors.GREEN)}      - Single step
+  {Colors.colorize('reverse', Colors.GREEN)}       - Reverse one step (if history available)
+  {Colors.colorize('forward', Colors.GREEN)}       - Forward one step (if history available)
+  {Colors.colorize('break <addr>', Colors.GREEN)}  - Set breakpoint at address
+  {Colors.colorize('break <addr> <cond>', Colors.GREEN)} - Set conditional breakpoint
+  {Colors.colorize('delete <addr>', Colors.GREEN)} - Remove breakpoint
+  {Colors.colorize('list', Colors.GREEN)}          - List breakpoints
+  {Colors.colorize('watch <addr>', Colors.GREEN)}  - Set watchpoint (rw/r/w)
+  {Colors.colorize('print / p <target>', Colors.GREEN)} - Print information
+    Supported: X0-X31, regs, mem [addr], cache, history
+  {Colors.colorize('info <target>', Colors.GREEN)}  - Show information (break/regs/pc)
+  {Colors.colorize('quit / q', Colors.GREEN)}      - Exit simulator
+  {Colors.colorize('help', Colors.GREEN)}          - Show this help
         """
-        self.console.print(Markdown(help_text))
+        self.console.print(help_text)
     
     def step(self) -> bool:
         if self.pc < 0 or self.pc >= len(self.instructions):
-            self.console.print("[red]Program counter out of bounds[/red]")
+            self.console.print(f"{Colors.colorize('Program counter out of bounds', Colors.RED)}")
             return False
         
-        # Check breakpoints
+        if self.debug_server and self.debug_server.check_conditional_breakpoints():
+            self.is_debugging = True
+            self.debug_command_loop()
+            return True
+        
         if self.pc in self.breakpoints:
-            self.console.print(f"[yellow]Breakpoint hit at PC={self.pc:#x}[/yellow]")
+            self.console.print(f"{Colors.colorize(f'Breakpoint hit at PC={self.pc:#x}', Colors.YELLOW)}")
             self.is_debugging = True
             self.debug_command_loop()
             return True
@@ -3972,9 +3958,6 @@ class CPU:
         self.running = True
         self.stats.start()
         
-        if self.profiler:
-            self.profiler.start_session()
-        
         self.logger.info("Starting program execution")
         self.display_state("Program Start")
         
@@ -3988,14 +3971,17 @@ class CPU:
                     self.logger.warning(f"Max instruction limit reached: {self.config.max_instructions}")
                     break
                 
-                # Check breakpoints
-                if self.pc in self.breakpoints:
-                    self.console.print(f"[yellow]Breakpoint hit at PC={self.pc:#x}[/yellow]")
+                if self.debug_server and self.debug_server.check_conditional_breakpoints():
                     self.is_debugging = True
                     self.debug_command_loop()
                     continue
                 
-                # Use JIT if enabled
+                if self.pc in self.breakpoints:
+                    self.console.print(f"{Colors.colorize(f'Breakpoint hit at PC={self.pc:#x}', Colors.YELLOW)}")
+                    self.is_debugging = True
+                    self.debug_command_loop()
+                    continue
+                
                 if self.jit:
                     continue_exec = self.execute_with_jit()
                 else:
@@ -4009,7 +3995,7 @@ class CPU:
                 
                 if self.config.step_mode and self.config.interactive_mode:
                     self.display_state("Step Execution")
-                    if not Confirm.ask("[yellow]Continue execution?[/yellow]", default=True):
+                    if input(f"{Colors.colorize('Continue execution? (y/n)', Colors.YELLOW)} ").lower() != 'y':
                         break
                 
                 if not self.config.step_mode and self.config.execution_interval > 0:
@@ -4017,11 +4003,11 @@ class CPU:
         
         except KeyboardInterrupt:
             self.logger.info("User interrupt")
-            self.console.print("\n[yellow]User interrupt[/yellow]")
+            self.console.print(f"\n{Colors.colorize('User interrupt', Colors.YELLOW)}")
         
         except Exception as e:
             self.logger.error(f"Execution error: {e}")
-            self.console.print(f"[red]Execution error: {e}[/red]")
+            self.console.print(f"{Colors.colorize(f'Execution error: {e}', Colors.RED)}")
             if self.config.debug_mode:
                 self.console.print(traceback.format_exc())
         
@@ -4033,14 +4019,9 @@ class CPU:
             self.logger.info("Program execution finished")
             self.display_state("Execution Complete")
             
-            # Display statistics
             cache_stats = self.cache.get_stats() if self.config.cache_size > 0 else None
             jit_stats = self.jit.get_stats() if self.jit else None
             self.stats.display_summary(self.console, cache_stats, jit_stats)
-            
-            # Display profile if enabled
-            if self.profiler:
-                self.profiler.display_report(self.console)
             
             if self.config.auto_save_crom:
                 self.save_crom()
@@ -4050,69 +4031,74 @@ class CPU:
 def main() -> None:
     console = Console()
     
-    console.rule("[bold cyan]CIN/PL CPU Simulator v2.0[/bold cyan]")
-    console.print(f"Instructions: {len(Constants.OPCODE_NAMES)} (with ARM64 & RISC-V extensions)")
-    console.print(f"PL keywords: {len(Constants.PL_KEYWORDS)}")
-    console.print(f".crom format: {Constants.CROM_MAGIC.decode()} v{Constants.CROM_VERSION} (compressed)")
-    console.print(f"Cache: Size {Config.cache_size}, Assoc {Config.cache_assoc}")
-    console.print(f"JIT: {'Enabled' if Config.enable_jit else 'Disabled'}")
+    console.rule(f"{Colors.colorize('CIN/PL CPU Simulator v4.3', Colors.CYAN, True)}")
+    console.print(f"{Colors.colorize('Instructions:', Colors.GREEN)} {len(Constants.OPCODE_NAMES)} (with ARM64 & RISC-V extensions)")
+    console.print(f"{Colors.colorize('PL keywords:', Colors.GREEN)} {len(Constants.PL_KEYWORDS)}")
+    console.print(f"{Colors.colorize('.crom format:', Colors.GREEN)} {Constants.CROM_MAGIC.decode()} v{Constants.CROM_VERSION} (compressed)")
+    console.print(f"{Colors.colorize('Cache:', Colors.GREEN)} Size {Config.cache_size}, Assoc {Config.cache_assoc}")
+    console.print(f"{Colors.colorize('JIT:', Colors.GREEN)} {Colors.colorize('Enabled' if Config.enable_jit else 'Disabled', Colors.YELLOW)}")
     console.rule()
     
     if len(sys.argv) < 2:
-        console.print("""
-[bold]Usage:[/bold]
+        console.print(f"""
+{Colors.colorize('Usage:', Colors.CYAN, True)}
   python cpu.py <file.cin|.pl|.asm|.bin> [options]
   
-[bold]CIN Language Example:[/bold]
-  function main() {
+{Colors.colorize('CIN Language Example:', Colors.CYAN)}
+  function main() {{
       int a = 10
       int b = 20
       int c = a + b
       println(c)
       return 0
-  }
+  }}
   
-[bold]Options:[/bold]
-  --step              Step through execution
-  --debug             Debug mode
-  --save              Save memory to .crom
-  --compile-only      Generate C++ only, no compilation
-  --no-compile        Skip compilation, run in interpreter
-  --jit               Enable JIT compilation
-  --profile           Enable performance profiling
-  --no-compress       Disable CROM compression
-  --output <file>     Output file name
-  --optimize <0-3>    Optimization level
-  --target <arch>     Target architecture (native, x86-64, arm64)
-  --mem-size <size>   Memory size (default: 1024)
-  --cache-size <size> Cache size in lines (default: 64)
-  --log-level <level> Log level (DEBUG/INFO/WARNING/ERROR)
-  --no-io             Disable I/O instructions
-  --strict            Strict mode
+{Colors.colorize('Options:', Colors.CYAN, True)}
+  {Colors.colorize('--step', Colors.YELLOW)}              Step through execution
+  {Colors.colorize('--debug', Colors.YELLOW)}             Debug mode
+  {Colors.colorize('--save', Colors.YELLOW)}              Save memory to .crom
+  {Colors.colorize('--jit', Colors.YELLOW)}               Enable JIT compilation
+  {Colors.colorize('--profile', Colors.YELLOW)}           Enable performance profiling
+  {Colors.colorize('--compile', Colors.YELLOW)}           Compile CIN to binary (.bin)
+  {Colors.colorize('--output <file>', Colors.YELLOW)}     Output file name
+  {Colors.colorize('--optimize <0-3>', Colors.YELLOW)}    Optimization level
+  {Colors.colorize('--mem-size <size>', Colors.YELLOW)}   Memory size (default: 1024)
+  {Colors.colorize('--cache-size <size>', Colors.YELLOW)} Cache size in lines (default: 64)
+  {Colors.colorize('--log-level <level>', Colors.YELLOW)} Log level (DEBUG/INFO/WARNING/ERROR)
+  {Colors.colorize('--no-io', Colors.YELLOW)}             Disable I/O instructions
+  {Colors.colorize('--strict', Colors.YELLOW)}            Strict mode
   
-[bold]Examples:[/bold]
+{Colors.colorize('Debug Commands:', Colors.CYAN, True)}
+  {Colors.colorize('step/s', Colors.GREEN)}        Single step
+  {Colors.colorize('reverse', Colors.GREEN)}       Reverse one step
+  {Colors.colorize('forward', Colors.GREEN)}       Forward one step
+  {Colors.colorize('break <addr>', Colors.GREEN)}  Set breakpoint
+  {Colors.colorize('watch <addr>', Colors.GREEN)}  Set watchpoint (rw/r/w)
+  {Colors.colorize('print/p', Colors.GREEN)}       Print registers/memory/cache/history
+  {Colors.colorize('info', Colors.GREEN)}          Show information
+  
+{Colors.colorize('Examples:', Colors.CYAN, True)}
   python cpu.py program.cin
   python cpu.py program.cin --jit --profile
-  python cpu.py program.cin --optimize 2 --output myapp
-  python cpu.py program.pl --step --cache-size 128
+  python cpu.py program.cin --compile --output program.bin
+  python cpu.py program.pl --step
         """)
         sys.exit(1)
     
     filename = sys.argv[1]
     if not os.path.exists(filename):
-        console.print(f"[red]Error: File '{filename}' not found[/red]")
+        console.print(f"{Colors.colorize('Error:', Colors.RED, True)} File '{filename}' not found")
         sys.exit(1)
     
     config = Config.from_args(sys.argv)
     config.validate()
     
-    # Enable JIT from command line if requested
     if '--jit' in sys.argv:
         config.enable_jit = True
     if '--profile' in sys.argv:
         config.profile = True
-    if '--no-compress' in sys.argv:
-        config.compress_crom = False
+    if '--compile' in sys.argv:
+        config.compile_to_bin = True
     
     crom_file = None
     for i, arg in enumerate(sys.argv):
@@ -4124,14 +4110,15 @@ def main() -> None:
     
     try:
         cpu = CPU(config, filename, crom_file, from_bin, console)
-        cpu.run()
+        if not config.compile_to_bin:
+            cpu.run()
     except CPUSimulatorError as e:
-        console.print(f"[red]Error: {e.message}[/red]")
+        console.print(f"{Colors.colorize('Error:', Colors.RED, True)} {e.message}")
         if e.detail:
-            console.print(f"[dim]Detail: {e.detail}[/dim]")
+            console.print(f"{Colors.colorize('Detail:', Colors.DIM)} {e.detail}")
         sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
+        console.print(f"{Colors.colorize('Unexpected error:', Colors.RED, True)} {e}")
         if config.debug_mode:
             console.print(traceback.format_exc())
         sys.exit(1)
