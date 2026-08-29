@@ -1,0 +1,671 @@
+/*
+ * Complex CIN Demo Program
+ * Demonstrates all major CIN language features
+ * Including: functions, structs, arrays, loops, conditionals,
+ * built-in functions, CPU instructions, and more
+ */
+
+// ==================== Struct Definitions ====================
+
+struct Person {
+    string name
+    int age
+    float height
+    bool active
+}
+
+struct Point {
+    float x
+    float y
+}
+
+struct Rectangle {
+    Point top_left
+    Point bottom_right
+    float area
+}
+
+struct Student {
+    Person info
+    int grades[5]
+    float gpa
+    bool graduated
+}
+
+// ==================== Global Variables ====================
+
+int global_counter = 0
+float pi = 3.14159265
+string greeting = "Welcome to CIN!"
+Person admin
+Student students[10]
+int fibonacci_cache[20]
+float temperatures[7][24]  // 7 days, 24 hours
+Rectangle shapes[5]
+
+// ==================== Function Declarations ====================
+
+function factorial(int n) -> int {
+    if (n <= 1) {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+function fibonacci(int n) -> int {
+    if (n <= 0) return 0
+    if (n == 1) return 1
+    
+    // Use cache if available
+    if (fibonacci_cache[n] != 0) {
+        return fibonacci_cache[n]
+    }
+    
+    int result = fibonacci(n - 1) + fibonacci(n - 2)
+    fibonacci_cache[n] = result
+    return result
+}
+
+function calculate_circle_area(float radius) -> float {
+    return pi * radius * radius
+}
+
+function calculate_rectangle_area(Rectangle rect) -> float {
+    float width = rect.bottom_right.x - rect.top_left.x
+    float height = rect.bottom_right.y - rect.top_left.y
+    return width * height
+}
+
+function calculate_average(int[] arr, int size) -> float {
+    if (size <= 0) return 0.0
+    
+    int sum = 0
+    for (int i = 0; i < size; i = i + 1) {
+        sum = sum + arr[i]
+    }
+    return sum / size
+}
+
+function find_max(int[] arr, int size) -> int {
+    if (size <= 0) return 0
+    
+    int max_val = arr[0]
+    for (int i = 1; i < size; i = i + 1) {
+        if (arr[i] > max_val) {
+            max_val = arr[i]
+        }
+    }
+    return max_val
+}
+
+function find_min(int[] arr, int size) -> int {
+    if (size <= 0) return 0
+    
+    int min_val = arr[0]
+    for (int i = 1; i < size; i = i + 1) {
+        if (arr[i] < min_val) {
+            min_val = arr[i]
+        }
+    }
+    return min_val
+}
+
+function is_prime(int n) -> bool {
+    if (n <= 1) return false
+    if (n == 2) return true
+    if (n % 2 == 0) return false
+    
+    int limit = sqrt(n)
+    for (int i = 3; i <= limit; i = i + 2) {
+        if (n % i == 0) {
+            return false
+        }
+    }
+    return true
+}
+
+function generate_primes(int count) -> void {
+    println("Generating first " + count + " prime numbers:")
+    
+    int found = 0
+    int num = 2
+    int primes[20]
+    
+    while (found < count && found < 20) {
+        if (is_prime(num)) {
+            primes[found] = num
+            found = found + 1
+            print(num + " ")
+        }
+        num = num + 1
+    }
+    println("")
+}
+
+function sort_array(int[] arr, int size) -> void {
+    // Bubble sort implementation
+    for (int i = 0; i < size - 1; i = i + 1) {
+        for (int j = 0; j < size - i - 1; j = j + 1) {
+            if (arr[j] > arr[j + 1]) {
+                int temp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = temp
+            }
+        }
+    }
+}
+
+function binary_search(int[] arr, int size, int target) -> int {
+    int left = 0
+    int right = size - 1
+    
+    while (left <= right) {
+        int mid = left + (right - left) / 2
+        
+        if (arr[mid] == target) {
+            return mid
+        }
+        if (arr[mid] < target) {
+            left = mid + 1
+        } else {
+            right = mid - 1
+        }
+    }
+    return -1
+}
+
+function create_person(string name, int age, float height) -> Person {
+    Person p
+    p.name = name
+    p.age = age
+    p.height = height
+    p.active = true
+    return p
+}
+
+function create_student(string name, int age, float height, int[] grades, int grade_count) -> Student {
+    Student s
+    s.info = create_person(name, age, height)
+    s.gpa = 0.0
+    s.graduated = false
+    
+    int sum = 0
+    for (int i = 0; i < grade_count && i < 5; i = i + 1) {
+        s.grades[i] = grades[i]
+        sum = sum + grades[i]
+    }
+    
+    if (grade_count > 0) {
+        s.gpa = sum / grade_count
+        if (s.gpa >= 60) {
+            s.graduated = true
+        }
+    }
+    
+    return s
+}
+
+function display_student_info(Student s) -> void {
+    println("=== Student Information ===")
+    println("Name: " + s.info.name)
+    println("Age: " + s.info.age)
+    println("Height: " + s.info.height + "m")
+    println("Active: " + s.info.active)
+    println("GPA: " + s.gpa)
+    println("Graduated: " + s.graduated)
+    print("Grades: ")
+    for (int i = 0; i < 5; i = i + 1) {
+        print(s.grades[i] + " ")
+    }
+    println("")
+    println("============================")
+}
+
+function process_temperatures() -> void {
+    println("Processing temperature data...")
+    
+    // Initialize temperature data for 7 days
+    for (int day = 0; day < 7; day = day + 1) {
+        for (int hour = 0; hour < 24; hour = hour + 1) {
+            // Simulate temperature variation
+            float base_temp = 20.0 + day * 0.5
+            float hour_offset = sin(hour * pi / 12) * 5.0
+            temperatures[day][hour] = base_temp + hour_offset + (day % 3) * 0.3
+        }
+    }
+    
+    // Calculate daily averages
+    println("Daily Temperature Averages:")
+    for (int day = 0; day < 7; day = day + 1) {
+        float sum = 0.0
+        for (int hour = 0; hour < 24; hour = hour + 1) {
+            sum = sum + temperatures[day][hour]
+        }
+        float avg = sum / 24
+        println("Day " + (day + 1) + ": " + avg + "°C")
+    }
+}
+
+function matrix_multiply(int[][] a, int[][] b, int size) -> int[][] {
+    // Matrix multiplication for square matrices
+    int[][] result
+    
+    for (int i = 0; i < size; i = i + 1) {
+        for (int j = 0; j < size; j = j + 1) {
+            result[i][j] = 0
+            for (int k = 0; k < size; k = k + 1) {
+                result[i][j] = result[i][j] + a[i][k] * b[k][j]
+            }
+        }
+    }
+    return result
+}
+
+// ==================== CPU Instruction Integration ====================
+
+function cpu_operations_example() -> void {
+    println("=== CPU Operations Example ===")
+    
+    // Using CPU-style instructions with CIN syntax
+    int x = 10
+    int y = 20
+    int z = 0
+    
+    // These map to CPU MOV instructions
+    set x 30
+    set y 40
+    
+    // Arithmetic operations
+    add x y      // x = x + y
+    subtract x 5 // x = x - 5
+    multiply x 2 // x = x * 2
+    
+    println("CPU operations result: " + x)
+    
+    // Conditional branching
+    if (x > 100) {
+        println("Value is large")
+        set x 0
+    } else {
+        println("Value is moderate: " + x)
+    }
+    
+    // Loop using CPU-style operations
+    int counter = 0
+    int total = 0
+    
+    for (int i = 0; i < 10; i = i + 1) {
+        add total i
+        increment counter
+    }
+    
+    println("Loop result: " + total)
+}
+
+// ==================== Advanced Examples ====================
+
+function recursion_demo(int n) -> void {
+    if (n <= 0) {
+        println("Base case reached")
+        return
+    }
+    
+    println("Recursion depth: " + n)
+    recursion_demo(n - 1)
+    println("Returning from depth: " + n)
+}
+
+function string_operations() -> void {
+    println("=== String Operations ===")
+    
+    string str1 = "Hello"
+    string str2 = "World"
+    string combined = str1 + " " + str2 + "!"
+    
+    println("Concatenated: " + combined)
+    println("Length: " + strlen(combined))
+    
+    string compare_str = "Hello World!"
+    int cmp = strcmp(combined, compare_str)
+    if (cmp == 0) {
+        println("Strings are equal")
+    } else {
+        println("Strings differ")
+    }
+    
+    string copy_str = strcpy(combined)
+    println("Copied string: " + copy_str)
+}
+
+function math_demo() -> void {
+    println("=== Math Operations ===")
+    
+    float angle = pi / 4  // 45 degrees
+    
+    println("sin(45°): " + sin(angle))
+    println("cos(45°): " + cos(angle))
+    println("tan(45°): " + tan(angle))
+    println("sqrt(16): " + sqrt(16))
+    println("pow(2, 8): " + pow(2, 8))
+    println("abs(-42): " + abs(-42))
+}
+
+function random_demo() -> void {
+    println("=== Random Numbers ===")
+    
+    // Seed with current time
+    srand(time())
+    
+    println("Random numbers:")
+    for (int i = 0; i < 5; i = i + 1) {
+        println(rand())
+    }
+}
+
+function array_operations() -> void {
+    println("=== Array Operations ===")
+    
+    int test_array[10]
+    int size = 10
+    
+    // Initialize with random values
+    for (int i = 0; i < size; i = i + 1) {
+        test_array[i] = rand() % 100
+    }
+    
+    println("Original array:")
+    for (int i = 0; i < size; i = i + 1) {
+        print(test_array[i] + " ")
+    }
+    println("")
+    
+    int max_val = find_max(test_array, size)
+    int min_val = find_min(test_array, size)
+    float avg = calculate_average(test_array, size)
+    
+    println("Max: " + max_val)
+    println("Min: " + min_val)
+    println("Average: " + avg)
+    
+    // Sort the array
+    sort_array(test_array, size)
+    
+    println("Sorted array:")
+    for (int i = 0; i < size; i = i + 1) {
+        print(test_array[i] + " ")
+    }
+    println("")
+    
+    // Binary search example
+    int search_target = test_array[4]
+    int index = binary_search(test_array, size, search_target)
+    println("Found " + search_target + " at index: " + index)
+}
+
+function shapes_demo() -> void {
+    println("=== Shapes Demo ===")
+    
+    // Create rectangles
+    Point p1, p2, p3, p4
+    p1.x = 0.0
+    p1.y = 0.0
+    p2.x = 5.0
+    p2.y = 3.0
+    
+    p3.x = 1.0
+    p3.y = 1.0
+    p4.x = 4.0
+    p4.y = 2.0
+    
+    Rectangle rect1
+    rect1.top_left = p1
+    rect1.bottom_right = p2
+    rect1.area = calculate_rectangle_area(rect1)
+    
+    Rectangle rect2
+    rect2.top_left = p3
+    rect2.bottom_right = p4
+    rect2.area = calculate_rectangle_area(rect2)
+    
+    println("Rectangle 1: (" + rect1.top_left.x + "," + rect1.top_left.y + ") to (" + 
+            rect1.bottom_right.x + "," + rect1.bottom_right.y + ")")
+    println("Area: " + rect1.area)
+    
+    println("Rectangle 2: (" + rect2.top_left.x + "," + rect2.top_left.y + ") to (" + 
+            rect2.bottom_right.x + "," + rect2.bottom_right.y + ")")
+    println("Area: " + rect2.area)
+    
+    // Store in array
+    shapes[0] = rect1
+    shapes[1] = rect2
+    
+    float total_area = 0
+    for (int i = 0; i < 2; i = i + 1) {
+        total_area = total_area + shapes[i].area
+    }
+    println("Total area: " + total_area)
+}
+
+function student_demo() -> void {
+    println("=== Student Demo ===")
+    
+    // Create students with different grades
+    int grades1[5] = {85, 90, 78, 92, 88}
+    int grades2[5] = {65, 70, 72, 68, 75}
+    int grades3[5] = {95, 92, 88, 96, 94}
+    
+    Student s1 = create_student("Alice", 20, 1.65, grades1, 5)
+    Student s2 = create_student("Bob", 22, 1.75, grades2, 5)
+    Student s3 = create_student("Charlie", 19, 1.80, grades3, 5)
+    
+    students[0] = s1
+    students[1] = s2
+    students[2] = s3
+    
+    display_student_info(s1)
+    display_student_info(s2)
+    display_student_info(s3)
+    
+    // Find best student
+    int best_index = 0
+    float best_gpa = students[0].gpa
+    for (int i = 1; i < 3; i = i + 1) {
+        if (students[i].gpa > best_gpa) {
+            best_gpa = students[i].gpa
+            best_index = i
+        }
+    }
+    
+    println("Best student: " + students[best_index].info.name + " with GPA: " + best_gpa)
+    
+    // Count graduates
+    int graduated_count = 0
+    for (int i = 0; i < 3; i = i + 1) {
+        if (students[i].graduated) {
+            graduated_count = graduated_count + 1
+        }
+    }
+    println("Graduates: " + graduated_count + "/3")
+}
+
+// ==================== Main Function ====================
+
+function main() -> int {
+    println("========================================")
+    println("  CIN COMPLEX DEMO PROGRAM")
+    println("  Showcasing All Features")
+    println("========================================")
+    println("")
+    
+    // 1. Basic Math
+    println("1. Basic Math Operations")
+    println("-------------------------")
+    int fact_5 = factorial(5)
+    println("factorial(5) = " + fact_5)
+    println("")
+    
+    // 2. Recursion
+    println("2. Recursion Demo")
+    println("-----------------")
+    recursion_demo(3)
+    println("")
+    
+    // 3. Fibonacci with Cache
+    println("3. Fibonacci Sequence (with cache)")
+    println("----------------------------------")
+    for (int i = 0; i < 10; i = i + 1) {
+        print(fibonacci(i) + " ")
+    }
+    println("")
+    println("")
+    
+    // 4. Prime Numbers
+    println("4. Prime Number Generator")
+    println("-------------------------")
+    generate_primes(15)
+    println("")
+    
+    // 5. Matrix Multiplication
+    println("5. Matrix Multiplication (2x2)")
+    println("-----------------------------")
+    int[][] mat1 = {{1, 2}, {3, 4}}
+    int[][] mat2 = {{5, 6}, {7, 8}}
+    int[][] result = matrix_multiply(mat1, mat2, 2)
+    println("[[1,2] * [[5,6]  =  [[19,22]")
+    println(" [3,4]]   [7,8]]     [43,50]]")
+    println("")
+    
+    // 6. Math Functions
+    println("6. Math Functions Demo")
+    println("----------------------")
+    math_demo()
+    println("")
+    
+    // 7. Random Numbers
+    println("7. Random Numbers Demo")
+    println("----------------------")
+    random_demo()
+    println("")
+    
+    // 8. Array Operations
+    println("8. Array Operations Demo")
+    println("------------------------")
+    array_operations()
+    println("")
+    
+    // 9. String Operations
+    println("9. String Operations Demo")
+    println("-------------------------")
+    string_operations()
+    println("")
+    
+    // 10. Temperature Processing
+    println("10. Temperature Processing")
+    println("-------------------------")
+    process_temperatures()
+    println("")
+    
+    // 11. Shapes Demo
+    println("11. Shapes Demo")
+    println("---------------")
+    shapes_demo()
+    println("")
+    
+    // 12. Student Management
+    println("12. Student Management System")
+    println("----------------------------")
+    student_demo()
+    println("")
+    
+    // 13. CPU Operations
+    println("13. CPU Instruction Integration")
+    println("-----------------------------")
+    cpu_operations_example()
+    println("")
+    
+    // 14. Global Counter
+    println("14. Global Variable Demo")
+    println("------------------------")
+    global_counter = 0
+    for (int i = 0; i < 5; i = i + 1) {
+        global_counter = global_counter + i
+        println("Iteration " + i + ": " + global_counter)
+    }
+    println("")
+    
+    // 15. Circle Area
+    println("15. Circle Area Calculator")
+    println("--------------------------")
+    float radius = 5.0
+    float area = calculate_circle_area(radius)
+    println("Circle with radius " + radius + " has area: " + area)
+    println("")
+    
+    // 16. Nested Loops with Break
+    println("16. Nested Loops with Break")
+    println("--------------------------")
+    for (int i = 0; i < 5; i = i + 1) {
+        for (int j = 0; j < 5; j = j + 1) {
+            print("(" + i + "," + j + ") ")
+            if (i == 2 && j == 2) {
+                println("")
+                println("Break at (2,2)!")
+                break
+            }
+        }
+        println("")
+        if (i == 2) {
+            break
+        }
+    }
+    println("")
+    
+    // 17. Sum of Squares
+    println("17. Sum of Squares (1^2 + 2^2 + ... + n^2)")
+    println("----------------------------------------")
+    int n = 10
+    int sum_squares = 0
+    for (int i = 1; i <= n; i = i + 1) {
+        sum_squares = sum_squares + pow(i, 2)
+    }
+    println("Sum of squares up to " + n + " = " + sum_squares)
+    println("")
+    
+    // 18. Check if perfect number
+    println("18. Perfect Number Check (28)")
+    println("----------------------------")
+    int num = 28
+    int divisor_sum = 0
+    for (int i = 1; i < num; i = i + 1) {
+        if (num % i == 0) {
+            divisor_sum = divisor_sum + i
+        }
+    }
+    if (divisor_sum == num) {
+        println(num + " is a perfect number!")
+    } else {
+        println(num + " is not a perfect number")
+    }
+    println("")
+    
+    println("========================================")
+    println("  DEMO COMPLETED SUCCESSFULLY!")
+    println("  Total program length: ~400 lines")
+    println("========================================")
+    println("")
+    println("Features demonstrated:")
+    println("  - Functions and recursion")
+    println("  - Structs and arrays")
+    println("  - 2D arrays and matrix operations")
+    println("  - String operations")
+    println("  - Built-in math functions")
+    println("  - Random number generation")
+    println("  - CPU instruction integration")
+    println("  - Sorting and searching")
+    println("  - Nested loops and control flow")
+    println("  - Global and local variables")
+    println("  - Type system support")
+    println("")
+    
+    return 0
+}
