@@ -1,0 +1,180 @@
+========================================
+  CIN COMPLEX DEMO PROGRAM
+  Showcasing All Features
+========================================
+
+1. Basic Math Operations
+-------------------------
+factorial(5) = 120
+
+2. Recursion Demo
+-----------------
+Recursion depth: 3
+Recursion depth: 2
+Recursion depth: 1
+Base case reached
+Returning from depth: 1
+Returning from depth: 2
+Returning from depth: 3
+
+3. Fibonacci Sequence (with cache)
+----------------------------------
+0 1 1 2 3 5 8 13 21 34 
+
+4. Prime Number Generator
+-------------------------
+Generating first 15 prime numbers:
+2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 
+
+5. Matrix Multiplication (2x2)
+-----------------------------
+[[1,2] * [[5,6]  =  [[19,22]
+ [3,4]]   [7,8]]     [43,50]]
+
+6. Math Functions Demo
+----------------------
+=== Math Operations ===
+sin(45°): 0.7071067805519557
+cos(45°): 0.7071067818211393
+tan(45°): 0.9999999982051034
+sqrt(16): 4
+pow(2, 8): 256
+abs(-42): 42
+
+7. Random Numbers Demo
+----------------------
+=== Random Numbers ===
+Random numbers:
+1415514550
+1010721410
+778491907
+559308347
+495076904
+
+8. Array Operations Demo
+------------------------
+=== Array Operations ===
+Original array:
+95 72 99 86 12 14 83 88 45 90 
+Max: 99
+Min: 12
+Average: 68.4
+Sorted array:
+12 14 45 72 83 86 88 90 95 99 
+Found 83 at index: 4
+
+9. String Operations Demo
+-------------------------
+=== String Operations ===
+Concatenated: Hello World!
+Length: 12
+Strings are equal
+Copied string: Hello World!
+
+10. Temperature Processing
+-------------------------
+Processing temperature data...
+Daily Temperature Averages:
+Day 1: 20.000000000747878°C
+Day 2: 20.800000000747875°C
+Day 3: 21.600000000747873°C
+Day 4: 21.500000000747878°C
+Day 5: 22.300000000747882°C
+Day 6: 23.100000000747873°C
+Day 7: 23.000000000747878°C
+
+11. Shapes Demo
+---------------
+=== Shapes Demo ===
+Rectangle 1: (0,0) to (5,3)
+Area: 15
+Rectangle 2: (1,1) to (4,2)
+Area: 3
+Total area: 18
+
+12. Student Management System
+----------------------------
+=== Student Demo ===
+=== Student Information ===
+Name: Alice
+Age: 20
+Height: 1.65m
+Active: true
+GPA: 86.6
+Graduated: true
+Grades: 85 90 78 92 88 
+============================
+=== Student Information ===
+Name: Bob
+Age: 22
+Height: 1.75m
+Active: true
+GPA: 70
+Graduated: true
+Grades: 65 70 72 68 75 
+============================
+=== Student Information ===
+Name: Charlie
+Age: 19
+Height: 1.8m
+Active: true
+GPA: 93
+Graduated: true
+Grades: 95 92 88 96 94 
+============================
+Best student: Charlie with GPA: 93
+Graduates: 3/3
+
+13. CPU Instruction Integration
+-----------------------------
+=== CPU Operations Example ===
+CPU operations result: 130
+Value is large
+Loop result: 45
+
+14. Global Variable Demo
+------------------------
+Iteration 0: 0
+Iteration 1: 1
+Iteration 2: 3
+Iteration 3: 6
+Iteration 4: 10
+
+15. Circle Area Calculator
+--------------------------
+Circle with radius 5 has area: 78.53981625
+
+16. Nested Loops with Break
+--------------------------
+(0,0) (0,1) (0,2) (0,3) (0,4) 
+(1,0) (1,1) (1,2) (1,3) (1,4) 
+(2,0) (2,1) (2,2) 
+Break at (2,2)!
+
+
+17. Sum of Squares (1^2 + 2^2 + ... + n^2)
+----------------------------------------
+Sum of squares up to 10 = 385
+
+18. Perfect Number Check (28)
+----------------------------
+28 is a perfect number!
+
+========================================
+  DEMO COMPLETED SUCCESSFULLY!
+  Total program length: ~400 lines
+========================================
+
+Features demonstrated:
+  - Functions and recursion
+  - Structs and arrays
+  - 2D arrays and matrix operations
+  - String operations
+  - Built-in math functions
+  - Random number generation
+  - CPU instruction integration
+  - Sorting and searching
+  - Nested loops and control flow
+  - Global and local variables
+  - Type system support
+
