@@ -1,2 +1,3 @@
 *.bak
 /*.crom
+__pycache__/
