@@ -10,7 +10,16 @@
 
 ## 项目简介
 
-UCPU是一个功能完整的CPU模拟器，提供从高级语言到机器码的完整工具链。支持CIN高级语言、PL汇编和ASM汇编，包含ARM64和RISC-V指令集扩展，具备JIT编译、缓存系统、性能分析和调试功能。
+UCPU是一个功能完整的CPU模拟器，提供从高级语言到机器码的完整工具链。支持CIN高级语言、PL汇编和ASM汇编，包含ARM64和RISC-V指令集扩展，具备JIT编译、Go原生加速库、缓存系统、性能分析和调试功能。
+
+模块化包结构（`ucpu/`），全线日志与错误输出基于 **rich**（彩色表格、面板、traceback），`--debug` 模式提供逐指令/寄存器/内存/栈/缓存的超详细追踪。
+
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [开发者编译文档 (BUILDING)](docs/BUILDING.md) | 环境搭建、Go 原生库编译、构建产物、打包、日志系统、扩展指南 |
+| [CIN 编程指南 (CIN_GUIDE)](docs/CIN_GUIDE.md) | CIN 高级语言完整语法：类型/函数/struct/数组/字符串/内建函数 |
 
 ---
 
@@ -78,14 +87,16 @@ graph LR
 
 | 功能模块 | 状态 | 说明 |
 |----------|------|------|
-| 指令集 | 111条 | Base + ARM64 + RISC-V + FP + Vector |
+| 指令集 | 112条 | Base + ARM64 + RISC-V + FP + Vector + SYS |
 | 寄存器 | 32+32 | 通用寄存器 + 向量寄存器 |
 | 内存系统 | 可配置 | 保护机制 + 分页支持 |
 | 缓存系统 | LRU | 可配置大小/关联度 |
-| JIT编译 | 动态 | 热点代码编译优化 |
+| JIT编译 | 动态 | 热点基本块编译优化 (与debug互斥) |
+| Go原生库 | c-shared | 整程序VM加速, 缺失时自动回退纯Python |
+| 日志系统 | rich | 彩色日志/表格/面板/traceback, --debug超详细追踪 |
 | 调试器 | 交互式 | 断点 + 单步 + 状态查看 |
 | 性能分析 | 指令级 | CPI + 缓存统计 + 热指令 |
-| CROM压缩 | zlib | 节省存储空间 |
+| CROM压缩 | zlib | 节省存储空间 (Go/Python双实现) |
 
 ---
 
@@ -108,11 +119,11 @@ flowchart TB
     end
     
     subgraph EXEC[执行层]
-        CORE[CPU Core]
-        JIT[JIT 引擎]
-        PIPE[流水线]
+        CORE[CPU Core<br/>解释执行]
+        JIT[JIT 引擎<br/>基本块编译]
+        NATIVE[Go 原生库<br/>c-shared VM]
     end
-    
+
     subgraph HW[硬件层]
         REG[寄存器文件<br/>X0-X31 / V0-V31]
         CACHE[缓存系统<br/>LRU淘汰]
@@ -356,10 +367,28 @@ flowchart TD
    pip install rich
    ```
 
-2. 查看帮助:
+2. (可选) 编译 Go 原生加速库, 见 [开发者编译文档](docs/BUILDING.md#4-构建-go-原生加速库):
    ```
+   cd ucpu/native
+   .\build.ps1        # Windows
+   sh build.sh        # Linux / Termux / macOS
+   ```
+
+3. 运行程序:
+   ```
+   python cpu.py basic.cin
    python cpu.py --help
    ```
+
+> 未编译原生库也可运行, 自动回退纯 Python 解释执行。
+
+### 执行路径
+
+| 路径 | 启用方式 | 特点 |
+|------|----------|------|
+| Go 原生 | 默认优先 (需编译库) | 整程序一次执行, 速度最快 |
+| JIT | `--jit` | 基本块动态编译, 与 `--debug` 互斥 |
+| 解释执行 | `--no-native` 或回退 | 支持全部 debug/step 功能 |
 
 ### 命令行选项
 
@@ -367,25 +396,34 @@ flowchart TD
 - `python cpu.py program.cin` - 运行CIN程序
 - `python cpu.py program.pl` - 运行PL程序
 - `python cpu.py program.asm` - 运行ASM程序
-- `python cpu.py program.bin` - 运行二进制
+- `python cpu.py program.bin` - 运行字节码
 
-**性能优化**
-- `--jit` - 启用JIT编译
-- `--profile` - 性能分析
+**执行路径**
+- `--no-native` - 禁用 Go 原生库, 强制纯 Python
+- `--jit` - 启用 Python JIT (基本块动态编译)
+
+**日志与调试**
+- `--debug` - 超详细 rich 调试 (逐指令/寄存器/内存/栈/缓存)
+- `--step` - 交互式单步调试
+- `--log-level DEBUG|INFO|WARNING|ERROR` - 日志级别
+- `--log-file <file>` - 日志输出到文件
+
+**性能分析**
+- `--profile` - 性能统计
 - `--cache-size 128` - 配置缓存大小
-
-**调试模式**
-- `--debug` - 调试模式
-- `--step` - 步进模式
+- `--mem-size <bytes>` - 内存大小
+- `--max-instructions <n>` - 指令数上限
 
 **编译选项**
-- `--compile-only` - 仅编译
-- `--optimize 2` - 优化级别
-- `--output myapp` - 输出文件名
+- `--compile` / `--compile-only` - 编译为 .bin 字节码
+- `-o, --output <file>` - 输出文件名
+- `--no-io` - 禁止宿主 I/O
+- `--strict` - 严格汇编模式
 
 **CROM选项**
 - `--save` - 保存CROM
 - `--no-compress` - 禁用压缩
+- `--crom <file>` - 加载指定 CROM 镜像
 
 ---
 
@@ -475,6 +513,46 @@ Executing: ADD X2, X0, X1
 dbg> continue
 Program completed
 ```
+
+---
+
+## 日志与调试 (rich)
+
+全线日志与错误输出基于 **rich**: 彩色表格、面板、进度与完整 traceback。模块不直接 `print`, 统一经 `ucpu/console.py` 适配层输出。
+
+### 日志级别
+
+| 级别 | 内容 |
+|------|------|
+| `ERROR` | 仅错误面板 |
+| `WARNING` | + 回退/降级告警 (如原生库缺失) |
+| `INFO` (默认) | + 编译汇总、执行起止、统计表 |
+| `DEBUG` | **超详细**: 全部埋点 + 逐指令追踪 |
+
+### debug 超详细输出 (`--debug`)
+
+- **CPU 初始化 dump**: 内存大小、缓存拓扑、SP 初值、堆基址、路径选择
+- **逐指令追踪**: 每条指令输出 PC、全局序号、操作数值、SP 与执行后 NZCV 标志
+  ```
+  PC=0x0004 #00000002 ADD X1=0x0(0) X2=0x1(1)  SP=0xfff8
+    => pc=0x0005 N=0 Z=0 C=0 V=0
+  ```
+- **内存读写追踪**: `MEM WR @0x000c w=1 value=0x0`, 覆盖全部加载/存储指令
+- **栈操作 / 缓存命中缺失 / SYS 系统调用** (功能号+参数)
+- **编译埋点**: CIN tokenize/parse 统计、JIT 块源码 dump、原生库调用参数
+
+### 错误处理
+
+- 加载/汇编/编译/运行错误统一红色 rich 面板, 带 `文件:行号` 定位
+- 未预期异常输出 rich 彩色完整 traceback (`--debug` 下加载/运行错误也附带)
+
+```
+┌──────────────────────── Load Error ────────────────────────┐
+│ prog.cin:12: Compiler error: Unknown function: printline   │
+└────────────────────────────────────────────────────────────┘
+```
+
+详见 [开发者编译文档 · 日志系统](docs/BUILDING.md#7-日志系统-rich-与-debug-超详细输出)。
 
 ---
 
@@ -589,6 +667,8 @@ xychart-beta
 
 ## 示例程序
 
+> CIN 语言完整语法见 [CIN 编程指南](docs/CIN_GUIDE.md)。
+
 ### 程序执行流程图
 
 ```mermaid
@@ -694,29 +774,37 @@ size: .word 9
 ```mermaid
 graph TD
     UCPU[UCPU]
-    
+
     UCPU --> PY[Python 3.8+]
     UCPU --> RICH[Rich Library]
+    UCPU --> GO[Go 1.21+ 原生库]
     UCPU --> STDLIB[Standard Library]
-    
-    RICH --> COLOR[Color输出]
+
+    RICH --> COLOR[彩色输出]
     RICH --> TABLE[表格渲染]
-    RICH --> PROGRESS[进度条]
-    RICH --> PANEL[面板]
-    
+    RICH --> PANEL[面板/Traceback]
+
+    GO --> CSHARE[c-shared 动态库]
+    CSHARE --> VM[原生字节码 VM]
+    CSHARE --> CROMGO[CROM 加速]
+
     STDLIB --> STRUCT[struct]
     STDLIB --> ZLIB[zlib]
-    STDLIB --> SUBPROC[subprocess]
+    STDLIB --> CTYPES[ctypes]
     STDLIB --> RE[正则表达式]
 ```
 
 | 组件 | 技术 | 说明 |
 |------|------|------|
-| 语言 | Python 3.8+ | 核心实现语言 |
-| UI | Rich | 终端美化输出 |
+| 语言 | Python 3.8+ | 核心实现语言 (模块化包 `ucpu/`) |
+| UI/日志 | Rich | 彩色输出、表格、面板、traceback |
+| 原生加速 | Go 1.21+ (c-shared) | 原生 VM + CROM, 可选, 自动回退 |
 | 压缩 | zlib | CROM压缩 |
 | 序列化 | struct | 二进制格式 |
+| FFI | ctypes | 加载 Go 共享库 |
 | 调试 | 原生Python | 交互式调试 |
+
+> 模块结构、原生库编译与扩展指南见 [开发者编译文档](docs/BUILDING.md)。
 
 ---
 
@@ -753,26 +841,6 @@ flowchart LR
 - 使用类型提示
 - 编写文档字符串
 - 添加单元测试
-
----
-
-## 许可证
-
-```
-MIT License
-
-Copyright (c) 2026 ByUsi Studio
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-```
 
 ---
 
