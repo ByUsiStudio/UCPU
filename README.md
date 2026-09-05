@@ -469,7 +469,7 @@ flowchart TD
     
     PRINT --> REGS[regs<br/>所有寄存器]
     PRINT --> REG[X0-X31<br/>单个寄存器]
-    PRINT --> MEM[mem [addr]<br/>内存内容]
+    PRINT --> MEM["mem [addr]<br/>内存内容"]
     PRINT --> CACHE[cache<br/>缓存统计]
 ```
 
