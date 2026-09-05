@@ -6,3 +6,4 @@ __pycache__/
 /t*.cin
 /test_*.asm
 /out_*.txt
+/*.asm
