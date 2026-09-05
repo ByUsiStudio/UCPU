@@ -5,3 +5,4 @@ __pycache__/
 /build/
 /t*.cin
 /test_*.asm
+/out_*.txt
