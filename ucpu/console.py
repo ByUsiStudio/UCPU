@@ -89,8 +89,7 @@ class Console:
 
     def print_exception(self, **kwargs) -> None:
         """rich 彩色堆栈回溯。"""
-        self._rc.print_exception(highlight=True, markup=False,
-                                 word_wrap=True, **kwargs)
+        self._rc.print_exception(word_wrap=True, **kwargs)
 
     def clear(self) -> None:
         self._rc.clear()
@@ -153,6 +152,14 @@ class Table:
     def add_row(self, *args) -> None:
         self._rows.append([_to_renderable(a) if isinstance(a, str) else a
                            for a in args])
+
+    @property
+    def rows(self) -> list:
+        return self._rows
+
+    @property
+    def headers(self) -> list:
+        return [name for name, _, _, _ in self._cols]
 
     def build(self) -> RichTable:
         t = RichTable(title=self._title or None, box=self._box,
