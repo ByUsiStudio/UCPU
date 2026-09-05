@@ -1,14 +1,23 @@
+import io
 import logging
 import os
 from typing import Any, Dict, Optional
 
 from rich.logging import RichHandler
-from rich.table import Table
-from rich.text import Text
+from rich.table import Table as RichTable
 
 from .console import Console
 
 _FORMAT = '%(message)s'
+
+
+def _render_plain(renderable) -> str:
+    """将 rich 渲染对象渲染为纯文本 (用于日志消息)。"""
+    buf = io.StringIO()
+    from rich.console import Console as RC
+    rc = RC(file=buf, highlight=False, emoji=False, markup=False, width=120)
+    rc.print(renderable)
+    return buf.getvalue().rstrip('\n')
 
 
 class Logger:
@@ -22,6 +31,9 @@ class Logger:
         self._log = logging.getLogger('ucpu')
         self._log.propagate = False
         self._log.setLevel(logging.DEBUG)   # handler 负责过滤
+        # 本类独占 'ucpu' logger, 避免重复 handler
+        for h in list(self._log.handlers):
+            self._log.removeHandler(h)
 
         self._handler = RichHandler(
             console=self.console.rich,
@@ -96,20 +108,20 @@ class Logger:
     # ---------------- 超详细调试辅助 ----------------
 
     def trace(self, msg: str) -> None:
-        """逐指令级追踪 (dim 弱化样式, 仅 DEBUG)。"""
-        self._log.debug(Text(msg, style='dim'))
+        """逐指令级追踪 (仅 DEBUG)。"""
+        self._log.debug(msg)
 
     def dump(self, title: str, fields: Dict[str, Any]) -> None:
-        """以 rich 表格输出调试快照 (仅 DEBUG)。"""
+        """以表格输出调试快照 (仅 DEBUG)。"""
         if not self.is_debug:
             return
-        t = Table(title=title, box=None, border_style='dim',
-                  show_header=False, padding=(0, 1))
-        t.add_column('key', style='bold cyan', no_wrap=True)
-        t.add_column('value', style='default')
+        t = RichTable(title=title, show_header=False, border_style='dim',
+                      padding=(0, 1), highlight=False)
+        t.add_column(style='bold cyan', no_wrap=True)
+        t.add_column()
         for k, v in fields.items():
             t.add_row(str(k), str(v))
-        self._log.debug(t)
+        self._log.debug(_render_plain(t))
 
     def hexdump(self, title: str, addr: int, data: bytes,
                 width: int = 16) -> None:

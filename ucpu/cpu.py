@@ -54,12 +54,28 @@ class CPU:
         self.config = config
         self.filename = filename
 
+        # debug 模式强制 DEBUG 级别 (超详细日志)
+        if config.debug_mode and config.log_level.upper() != 'DEBUG':
+            config.log_level = 'DEBUG'
         self.logger = Logger(self.console, config.log_level)
         if config.log_file:
             self.logger.set_log_file(config.log_file)
+        # 逐指令超详细追踪开关 (DEBUG 级别启用)
+        self._trace = self.logger.is_debug
 
         self.memory = FastMemory(config.mem_size)
         self.cache = Cache(config.cache_size, config.cache_assoc)
+        # 内存访问日志 (DEBUG 级别生效)
+        self.memory.attach_logger(self.logger)
+
+        self.logger.dump("CPU 初始化", {
+            'memory': f"0x{config.mem_size:x} bytes",
+            'cache': f"{config.cache_size} lines x {config.cache_assoc}-way",
+            'sp_init': f"0x{self.sp:x}",
+            'heap_base': f"0x{self.heap_ptr:x}",
+            'native': config.use_native,
+            'jit': config.enable_jit,
+        })
 
         self.regs = RegisterFile(self.console)
         self.vec_regs = VectorRegisterFile()
