@@ -76,6 +76,13 @@ class CPU:
 
         self.stats = Statistics()
         self.jit = None
+        if config.enable_jit and not config.debug_mode and not config.step_mode:
+            try:
+                from .jit import JITCompiler
+                self.jit = JITCompiler()
+                self.logger.info("JIT compiler enabled")
+            except Exception as e:
+                self.logger.warning(f"JIT unavailable: {e}")
         self.running = False
         self.is_debugging = False
         self.breakpoints: set = set()
@@ -1208,7 +1215,8 @@ class CPU:
             self._emit_text(_format_float(_bits_to_f(x0)))
         elif call_id == Syscall.ITOA:
             addr = self._sys_buffer()
-            self.memory.write_string(addr, str(x0))
+            signed = x0 if x0 < (1 << 63) else x0 - (1 << 64)
+            self.memory.write_string(addr, str(signed))
             self._set_reg(0, addr)
         elif call_id == Syscall.FTOA:
             addr = self._sys_buffer()
@@ -1379,6 +1387,15 @@ class CPU:
                 self.is_debugging = True
                 self.debug_command_loop()
                 continue
+
+            if self.jit is not None:
+                jit_result = self.jit.try_step(self)
+                if jit_result is True:
+                    continue
+                if jit_result is False:
+                    self.logger.info("Program ended (JIT)")
+                    break
+                # None: 该指令不适合 JIT, 回退解释执行
 
             opcode, args = self.instructions[self.pc]
             continue_exec = self.execute(opcode, args)

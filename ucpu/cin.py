@@ -1167,8 +1167,14 @@ class CodeGen:
         if kind == 'neg':
             t = self.gen_value(node[1])
             self.emit('MOV', self.reg(1), self.reg(0))
-            self.emit('MOV', self.reg(0), self.imm(0))
-            self.emit('SUB', self.reg(0), self.reg(1))
+            if t == 'float':
+                # 浮点: 0.0 - x (x1 为 float64 位模式)
+                self.emit('MOV', self.reg(0), self.imm(0))
+                self.emit('SYS', self.imm(Syscall.ITOF))
+                self.emit('SYS', self.imm(Syscall.FSUB))
+            else:
+                self.emit('MOV', self.reg(0), self.imm(0))
+                self.emit('SUB', self.reg(0), self.reg(1))
             return t
         if kind == 'not':
             t = self.gen_value(node[1])

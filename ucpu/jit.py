@@ -89,9 +89,15 @@ class JITCompiler:
                 val = self._val(args[1])
                 if val is None:
                     return None
+                # 有符号除法, 向零截断 (与解释器一致)
                 return [f'_d = {val}',
                         'if _d == 0: raise ExecutionError("Division by zero")',
-                        self._reg_write(rd, f'({self._reg_read(rd)} // _d)')]
+                        '_n = ' + self._reg_read(rd),
+                        '_sn = _n if _n < (1 << 63) else _n - (1 << 64)',
+                        '_sd = _d if _d < (1 << 63) else _d - (1 << 64)',
+                        '_q = abs(_sn) // abs(_sd)',
+                        '_q = _q if (_sn < 0) == (_sd < 0) else -_q',
+                        self._reg_write(rd, '_q')]
             if opcode == 'INC':
                 rd = args[0][1]
                 return [self._reg_write(rd, f'{self._reg_read(rd)} + 1')]
@@ -200,11 +206,10 @@ class JITCompiler:
             "    return None\n"
         )
         try:
-            namespace: Dict[str, Any] = {}
+            from .errors import ExecutionError
+            namespace: Dict[str, Any] = {'ExecutionError': ExecutionError}
             exec(compile(source, '<jit-block>', 'exec'), namespace)
             func = namespace['block']
-            # 验证可运行
-            func(cpu, cpu.memory, cpu.regs._regs)
         except Exception as e:
             cpu.logger.debug(f"JIT block compile failed at {start}: {e}")
             return None

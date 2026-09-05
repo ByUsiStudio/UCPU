@@ -161,10 +161,15 @@ class Assembler:
         return self.instructions, self.labels, self.data_labels
 
     def _handle_data(self, line: str, data_addr: int, line_num: int, fname: str) -> int:
-        parts = self._split_operands(line)
+        # 先按空白拆出指令名 (如 ASCIZ "..."), 其余按逗号拆分
+        head_tokens = line.split(None, 1)
+        if not head_tokens:
+            return data_addr
+        directive = head_tokens[0].upper().lstrip('.')
+        rest = head_tokens[1] if len(head_tokens) > 1 else ''
+        parts = [directive] + self._split_operands(rest)
         if not parts:
             return data_addr
-        directive = parts[0].upper().lstrip('.')
         if directive in ('BYTE',):
             directive = 'DB'
         elif directive in ('WORD',):
