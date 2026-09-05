@@ -650,8 +650,9 @@ class CompileResult:
 
 
 class CINCompiler:
-    def __init__(self, console: Optional[Console] = None):
+    def __init__(self, console: Optional[Console] = None, logger=None):
         self.console = console or Console()
+        self.logger = logger
 
     def compile(self, filename: str) -> CompileResult:
         with open(filename, 'r', encoding='utf-8') as f:
@@ -659,13 +660,29 @@ class CINCompiler:
         return self.compile_source(source, filename)
 
     def compile_source(self, source: str, filename: str = '<cin>') -> CompileResult:
+        dbg = self.logger.debug if (self.logger and self.logger.is_debug) \
+            else (lambda msg: None)
         tokens = tokenize(source)
+        dbg(f"CIN tokenize: {len(tokens)} tokens")
         parser = Parser(tokens)
         structs, globals_, functions = parser.parse_program()
+        dbg(f"CIN parse: {len(structs)} structs, {len(globals_)} globals, "
+            f"{len(functions)} functions "
+            f"({', '.join(list(functions)[:8])}"
+            f"{', ...' if len(functions) > 8 else ''})")
+        for name, fn in functions.items():
+            dbg(f"CIN function {name}: {len(fn.params)} params")
 
         gen = CodeGen(structs, functions)
         gen.layout_globals(globals_)
+        for name, (typ, addr, block) in gen.globals.items():
+            dbg(f"CIN global '{name}': type={typ} addr=0x{addr:x} block={block}")
         result = gen.generate(globals_, functions)
+        for name in functions:
+            dbg(f"CIN codegen function '{name}' done")
+        dbg(f"CIN codegen total: {len(result.instructions)} instructions, "
+            f"{sum(len(d) for _, d in result.data_writes)} data bytes, "
+            f"{len(result.labels)} labels, {len(result.data_writes)} data writes")
         return result
 
 

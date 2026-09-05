@@ -11,6 +11,20 @@ class FastMemory:
         self._memory = bytearray(size)
         self._view = memoryview(self._memory)
         self._protection: Dict[int, str] = {}
+        # 调试日志钩子 (DEBUG 级别记录每次读写)
+        self._log = None
+
+    def attach_logger(self, logger) -> None:
+        """挂接日志器, DEBUG 级别下记录所有内存读写。"""
+        self._log = logger
+
+    @property
+    def _mem_trace(self) -> bool:
+        return self._log is not None and self._log.is_debug
+
+    def _trace_mem(self, op: str, addr: int, value, width: int) -> None:
+        vs = f"0x{value:x}" if isinstance(value, int) else repr(value)
+        self._log.trace(f"  MEM {op:<5} @0x{addr:04x} w={width} value={vs}")
 
     def __len__(self) -> int:
         return self._size
@@ -57,36 +71,56 @@ class FastMemory:
     def read_byte(self, addr: int) -> int:
         self._check_bounds(addr)
         self._check_protection(addr, 'r')
-        return self._view[addr]
+        v = self._view[addr]
+        if self._mem_trace:
+            self._trace_mem('RD', addr, v, 1)
+        return v
 
     def write_byte(self, addr: int, value: int) -> None:
         self._check_bounds(addr)
         self._check_protection(addr, 'w')
         self._view[addr] = value & 0xFF
+        if self._mem_trace:
+            self._trace_mem('WR', addr, value & 0xFF, 1)
 
     def read_word(self, addr: int) -> int:
         self._check_bounds(addr, 2)
-        return struct.unpack_from('<H', self._view, addr)[0]
+        v = struct.unpack_from('<H', self._view, addr)[0]
+        if self._mem_trace:
+            self._trace_mem('RD', addr, v, 2)
+        return v
 
     def write_word(self, addr: int, value: int) -> None:
         self._check_bounds(addr, 2)
         struct.pack_into('<H', self._view, addr, value & 0xFFFF)
+        if self._mem_trace:
+            self._trace_mem('WR', addr, value & 0xFFFF, 2)
 
     def read_dword(self, addr: int) -> int:
         self._check_bounds(addr, 4)
-        return struct.unpack_from('<I', self._view, addr)[0]
+        v = struct.unpack_from('<I', self._view, addr)[0]
+        if self._mem_trace:
+            self._trace_mem('RD', addr, v, 4)
+        return v
 
     def write_dword(self, addr: int, value: int) -> None:
         self._check_bounds(addr, 4)
         struct.pack_into('<I', self._view, addr, value & 0xFFFFFFFF)
+        if self._mem_trace:
+            self._trace_mem('WR', addr, value & 0xFFFFFFFF, 4)
 
     def read_qword(self, addr: int) -> int:
         self._check_bounds(addr, 8)
-        return struct.unpack_from('<Q', self._view, addr)[0]
+        v = struct.unpack_from('<Q', self._view, addr)[0]
+        if self._mem_trace:
+            self._trace_mem('RD', addr, v, 8)
+        return v
 
     def write_qword(self, addr: int, value: int) -> None:
         self._check_bounds(addr, 8)
         struct.pack_into('<Q', self._view, addr, value & 0xFFFFFFFFFFFFFFFF)
+        if self._mem_trace:
+            self._trace_mem('WR', addr, value & 0xFFFFFFFFFFFFFFFF, 8)
 
     def read_float(self, addr: int) -> float:
         self._check_bounds(addr, 4)

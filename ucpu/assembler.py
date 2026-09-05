@@ -17,17 +17,26 @@ _RE_LABEL = re.compile(r'^[a-zA-Z_.$][a-zA-Z0-9_.$]*$')
 
 class Assembler:
     def __init__(self, memory: FastMemory, console: Optional[Console] = None,
-                 strict: bool = False):
+                 strict: bool = False, logger=None):
         self.memory = memory
         self.console = console or Console()
         self.strict = strict
+        self.logger = logger
         self.instructions: List[Instruction] = []
         self.labels: Dict[str, int] = {}
         self.data_labels: Dict[str, int] = {}
 
+    def _dbg(self, msg: str) -> None:
+        if self.logger is not None:
+            self.logger.debug(msg)
+
     def assemble_file(self, filename: str) -> Tuple[List[Instruction], Dict[str, int], Dict[str, int]]:
         lines = self._preprocess(filename, set())
-        return self._assemble_lines(lines, filename)
+        self._dbg(f"ASM preprocess: {len(lines)} lines from {filename}")
+        result = self._assemble_lines(lines, filename)
+        self._dbg(f"ASM assembled: {len(result[0])} instructions, "
+                  f"{len(result[1])} labels, {len(result[2])} data labels")
+        return result
 
     def assemble_source(self, source: str, filename: str = '<source>'
                         ) -> Tuple[List[Instruction], Dict[str, int], Dict[str, int]]:

@@ -22,12 +22,17 @@ _BRANCH_OPS = Constants.BRANCH_OPS | {'HALT', 'SYS', 'IN', 'OUT'}
 
 
 class JITCompiler:
-    def __init__(self):
+    def __init__(self, logger=None):
+        self.logger = logger
         self.blocks: Dict[int, Callable] = {}
         self.block_ranges: Dict[int, Tuple[int, int]] = {}
         self.compilation_count = 0
         self.total_calls = 0
         self.cache_hits = 0
+
+    def _dbg(self, msg: str) -> None:
+        if self.logger is not None:
+            self.logger.debug(msg)
 
     # ---------------- 代码生成 ----------------
 
@@ -182,6 +187,9 @@ class JITCompiler:
         start = cpu.pc
         if start in self.blocks:
             self.cache_hits += 1
+            if self.logger is not None and self.logger.is_debug:
+                self._dbg(f"JIT cache hit: block @0x{start:x} "
+                          f"(hits={self.cache_hits})")
             return self.block_ranges[start][1]
 
         end = start
@@ -217,6 +225,10 @@ class JITCompiler:
         self.blocks[start] = func
         self.block_ranges[start] = (start, end)
         self.compilation_count += 1
+        self._dbg(f"JIT compiled block 0x{start:x}-0x{end:x} "
+                  f"({end - start} instrs, total {self.compilation_count})")
+        if self.logger is not None and self.logger.is_debug:
+            self._dbg('JIT block source:\n' + source.rstrip())
         return end
 
     def try_step(self, cpu) -> Optional[bool]:

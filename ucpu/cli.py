@@ -5,7 +5,7 @@ import sys
 from typing import List, Optional
 
 from .config import Config
-from .console import Colors, Console
+from .console import Colors, Console, Panel
 from .cpu import CPU
 from .errors import CPUSimulatorError
 
@@ -19,7 +19,7 @@ HELP_TEXT = f"""
   --no-native          禁用 Go 原生库, 强制纯 Python 解释执行
   --jit                启用 Python JIT (基本块动态编译)
   --step               单步执行 (交互式)
-  --debug              调试模式 (统计 + 状态详情)
+  --debug              调试模式 (超详细 rich 追踪: 逐指令/寄存器/内存/栈/缓存)
   --profile            执行后输出性能统计
   --save               执行后保存 .crom 内存镜像
   --no-compress        .crom 不压缩
@@ -78,8 +78,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             break
 
     if not program_file:
-        console.print(Colors.colorize("Error: no program file specified", Colors.RED))
-        console.print("Use --help for usage information.")
+        console.print(Panel("No program file specified.\n"
+                            "Use --help for usage information.",
+                            title="Error", border_style='red'))
         return 1
 
     config = Config.from_args(['cpu.py'] + args)
@@ -92,13 +93,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         cpu = CPU(config, program_file, crom_file=crom_file)
     except CPUSimulatorError as e:
-        console.print(Colors.colorize(f"Load error: {e}", Colors.RED))
+        console.print(Panel(str(e), title="Load Error", border_style='red'))
         return 1
     except Exception as e:
-        console.print(Colors.colorize(f"Error: {e}", Colors.RED))
+        console.print(Panel(str(e), title="Error", border_style='red'))
         if config.debug_mode:
-            import traceback
-            traceback.print_exc()
+            # 超详细: rich 彩色完整堆栈
+            console.print_exception()
         return 1
 
     try:
@@ -114,7 +115,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     except KeyboardInterrupt:
         pass
     except CPUSimulatorError as e:
-        console.print(Colors.colorize(f"Error: {e}", Colors.RED))
+        console.print(Panel(str(e), title="Error", border_style='red'))
+        if config.debug_mode:
+            console.print_exception()
+        return 1
+    except Exception as e:
+        console.print(Panel(str(e), title="Unexpected Error",
+                            border_style='red'))
+        console.print_exception()
         return 1
     return 0
 

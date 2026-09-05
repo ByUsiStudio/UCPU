@@ -4,7 +4,6 @@ import random
 import struct
 import sys
 import time
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .assembler import Assembler
@@ -68,15 +67,6 @@ class CPU:
         # 内存访问日志 (DEBUG 级别生效)
         self.memory.attach_logger(self.logger)
 
-        self.logger.dump("CPU 初始化", {
-            'memory': f"0x{config.mem_size:x} bytes",
-            'cache': f"{config.cache_size} lines x {config.cache_assoc}-way",
-            'sp_init': f"0x{self.sp:x}",
-            'heap_base': f"0x{self.heap_ptr:x}",
-            'native': config.use_native,
-            'jit': config.enable_jit,
-        })
-
         self.regs = RegisterFile(self.console)
         self.vec_regs = VectorRegisterFile()
 
@@ -84,6 +74,16 @@ class CPU:
         self.pc = 0
         self.sp = (config.mem_size - Constants.STACK_SLOT) & ~0x7
         self.heap_ptr = config.mem_size // 2
+
+        self.logger.dump("CPU 初始化", {
+            'memory': f"0x{config.mem_size:x} bytes",
+            'cache': f"{config.cache_size} lines x {config.cache_assoc}-way",
+            'sp_init': f"0x{self.sp:x}",
+            'heap_base': f"0x{self.heap_ptr:x}",
+            'native': config.use_native,
+            'jit': config.enable_jit,
+            'log_level': config.log_level,
+        })
 
         self.instructions: List[Instruction] = []
         self.labels: Dict[str, int] = {}
@@ -95,7 +95,7 @@ class CPU:
         if config.enable_jit and not config.debug_mode and not config.step_mode:
             try:
                 from .jit import JITCompiler
-                self.jit = JITCompiler()
+                self.jit = JITCompiler(logger=self.logger)
                 self.logger.info("JIT compiler enabled")
             except Exception as e:
                 self.logger.warning(f"JIT unavailable: {e}")
@@ -129,7 +129,7 @@ class CPU:
 
         if ext == '.cin':
             from .cin import CINCompiler
-            compiler = CINCompiler(self.console)
+            compiler = CINCompiler(self.console, logger=self.logger)
             result = compiler.compile(filename)
             self.instructions = result.instructions
             self.labels = result.labels
@@ -159,12 +159,17 @@ class CPU:
             from . import crom as crom_mod
             crom_mod.load_crom(self.memory, crom_file, self.logger)
 
-        asm = Assembler(self.memory, self.console, strict=self.config.strict_mode)
+        asm = Assembler(self.memory, self.console, strict=self.config.strict_mode,
+                        logger=self.logger)
         self.instructions, self.labels, self.data_labels = asm.assemble_file(filename)
         self.entry_pc = self.labels.get('main', 0)
         self.pc = self.entry_pc
         self.cache.warmup(self.instructions)
         self.logger.info(f"Assembly successful: {len(self.instructions)} instructions")
+        if self.logger.is_debug:
+            self.logger.dump("汇编标签表", {name: f"0x{pc:x}"
+                                        for name, pc in
+                                        sorted(self.labels.items())})
     def _init_dispatch(self) -> None:
         t: Dict[str, Any] = {}
         t['MOV'] = self._op_mov
@@ -290,10 +295,61 @@ class CPU:
 
     def _set_reg(self, n: int, v: int) -> None:
         v &= MASK64
+        if self._trace:
+            old = self._reg(n)
+            if old != v:
+                sv = v if v < (1 << 63) else v - (1 << 64)
+                self.logger.trace(f"  R[{n}] {self._fmt_reg(n, old)} -> "
+                                  f"0x{v:016x} ({sv})")
         if n == Constants.SP_REG:
             self.sp = v
         else:
             self.regs.write(n, v)
+
+    @staticmethod
+    def _fmt_reg(n: int, v: int) -> str:
+        return f"0x{v:016x}"
+
+    def _fmt_op_trace(self, op: Operand) -> str:
+        """格式化操作数并附带当前值 (超详细追踪)。"""
+        kind = op[0]
+        try:
+            if kind == 'reg':
+                n = op[1]
+                v = self._reg(n)
+                return f"X{n}=0x{v:x}({v if v < (1 << 63) else v - (1 << 64)})"
+            if kind == 'imm':
+                return f"#{op[1]}"
+            if kind == 'mem':
+                addr = self._mem_addr(op)
+                return (f"[{op[1] if op[1] >= 0 else 'abs'}"
+                        f"{op[2]:+d}]@0x{addr:x}"
+                        f"=0x{self.memory.read_qword(addr):x}")
+            if kind == 'cond':
+                return (f"{op[1]}="
+                        f"{int(self._condition(op[1]))}"
+                        f"{{N={int(self.pstate['N'])} Z={int(self.pstate['Z'])} "
+                        f"C={int(self.pstate['C'])} V={int(self.pstate['V'])}}}")
+            if kind == 'label':
+                return f"{op[1]}->0x{self.labels.get(op[1], -1):x}"
+            if kind == 'str':
+                return f'"@{op[1]}"'
+            if kind == 'float':
+                return f"#{op[1]}f"
+        except Exception:
+            pass
+        return self._fmt_operand(op)
+
+    def _trace_flags(self) -> str:
+        p = self.pstate
+        return (f"N={int(p['N'])} Z={int(p['Z'])} "
+                f"C={int(p['C'])} V={int(p['V'])}")
+
+    def _trace_cache(self, addr: int, hit: bool, kind: str) -> None:
+        cs = self.cache.get_stats()
+        self.logger.trace(
+            f"  CACHE {'HIT ' if hit else 'MISS'} {kind} @0x{addr:x} "
+            f"(hit_rate={cs['hit_rate'] * 100:.1f}%)")
 
     def _val(self, op: Operand) -> Union[int, float]:
         kind = op[0]
@@ -353,10 +409,14 @@ class CPU:
         sa = a if a < (1 << 63) else a - (1 << 64)
         sb = b if b < (1 << 63) else b - (1 << 64)
         sr = sa - sb
+        old = dict(self.pstate)
         self.pstate['Z'] = (result == 0)
         self.pstate['N'] = bool(result & (1 << 63))
         self.pstate['C'] = a >= b            # 无借位
         self.pstate['V'] = (sr > (1 << 63) - 1) or (sr < -(1 << 63))
+        if self._trace and old != self.pstate:
+            self.logger.trace(f"  FLAGS <- {self._trace_flags()} "
+                              f"(a=0x{a:x} b=0x{b:x})")
 
     def _set_flags_add(self, a: int, b: int, result: int) -> None:
         a &= MASK64
@@ -365,10 +425,14 @@ class CPU:
         sa = a if a < (1 << 63) else a - (1 << 64)
         sb = b if b < (1 << 63) else b - (1 << 64)
         ss = sa + sb
+        old = dict(self.pstate)
         self.pstate['Z'] = (result == 0)
         self.pstate['N'] = bool(result & (1 << 63))
         self.pstate['C'] = (a + b) > MASK64
         self.pstate['V'] = (ss > (1 << 63) - 1) or (ss < -(1 << 63))
+        if self._trace and old != self.pstate:
+            self.logger.trace(f"  FLAGS <- {self._trace_flags()} "
+                              f"(a=0x{a:x} b=0x{b:x})")
 
     # ==================== 栈 ====================
 
@@ -377,12 +441,18 @@ class CPU:
         if self.sp < self.heap_ptr + 4096:
             raise ExecutionError("Stack overflow (collides with heap)")
         self.memory.write_qword(self.sp, value & MASK64)
+        if self._trace:
+            self.logger.trace(f"  PUSH @0x{self.sp:x} <- "
+                              f"0x{value & MASK64:016x}")
 
     def _pop(self) -> int:
         if self.sp >= len(self.memory) - Constants.STACK_SLOT:
             raise ExecutionError("Stack underflow")
         value = self.memory.read_qword(self.sp)
         self.sp = (self.sp + Constants.STACK_SLOT) & MASK64
+        if self._trace:
+            self.logger.trace(f"  POP  @0x{self.sp - 8:x} -> "
+                              f"0x{value:016x}")
         return value
 
     def _check_stack(self) -> None:
@@ -426,6 +496,8 @@ class CPU:
         self.stats.record_memory_read()
         hit = self.cache.read(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'R')
         self._set_reg(rd, self.memory.read_dword(addr))
         return True
 
@@ -435,6 +507,8 @@ class CPU:
         self.stats.record_memory_write()
         hit = self.cache.write(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'W')
         self.memory.write_dword(addr, self._reg(rs))
         return True
 
@@ -571,17 +645,18 @@ class CPU:
             return True
         op = args[0]
         if op[0] == 'str':
-            self._emit_text(self.memory.read_string(op[1]))
+            text = self.memory.read_string(op[1])
         else:
             val = self._val(op)
             if op[0] == 'float' or (op[0] == 'vec') or (op[0] == 'veclane'):
-                self._emit_text(_format_float(float(val)))
+                text = _format_float(float(val))
             else:
                 iv = int(val)
-                if iv == 10:
-                    self._emit_text('\n')
-                else:
-                    self._emit_text(str(iv))
+                text = '\n' if iv == 10 else str(iv)
+        if self._trace:
+            shown = text.replace('\n', '\\n')
+            self.logger.trace(f"  OUT -> {shown!r}")
+        self._emit_text(text)
         return True
 
     def _op_halt(self, args):
@@ -672,6 +747,8 @@ class CPU:
         self.stats.record_memory_read()
         hit = self.cache.read(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'R')
         self._set_reg(rd, self.memory.read_dword(addr))
         return True
 
@@ -681,6 +758,8 @@ class CPU:
         self.stats.record_memory_write()
         hit = self.cache.write(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'W')
         self.memory.write_dword(addr, self._reg(rs))
         return True
 
@@ -943,6 +1022,8 @@ class CPU:
         self.stats.record_memory_read()
         hit = self.cache.read(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'R')
         if bits == 8:
             v = self.memory.read_byte(addr)
             if signed:
@@ -966,6 +1047,8 @@ class CPU:
         self.stats.record_memory_write()
         hit = self.cache.write(addr)
         self.stats.record_cache(hit)
+        if self._trace:
+            self._trace_cache(addr, hit, 'W')
         v = self._reg(rs)
         if bits == 8:
             self.memory.write_byte(addr, v & 0xFF)
@@ -1155,6 +1238,11 @@ class CPU:
         x0 = self._reg(0)
         x1 = self._reg(1)
         x2 = self._reg(2)
+        if self._trace:
+            name = Syscall(call_id).name if call_id in Syscall._value2member_map_ \
+                else f'UNKNOWN({call_id})'
+            self.logger.trace(f"  SYS #{call_id} ({name}) "
+                              f"x0=0x{x0:x} x1=0x{x1:x} x2=0x{x2:x}")
 
         if call_id == Syscall.ABS:
             self._set_reg(0, abs(x0 if x0 < (1 << 63) else x0 - (1 << 64)))
@@ -1262,12 +1350,20 @@ class CPU:
     # ==================== 执行引擎 ====================
 
     def execute(self, opcode: str, args: List[Operand]) -> bool:
+        if self._trace:
+            ops = ' '.join(self._fmt_op_trace(a) for a in args)
+            self.logger.trace(
+                f"PC=0x{self.pc:04x} #{self.stats.instruction_count:08d} "
+                f"{opcode} {ops}  SP=0x{self.sp:x}")
         self.pc += 1
         handler = self._dispatch.get(opcode)
         if handler is None:
             raise ExecutionError(f"Unimplemented instruction: {opcode}")
         result = handler(args)
         self.stats.record_instruction(opcode)
+        if self._trace:
+            self.logger.trace(
+                f"  => pc=0x{self.pc:04x} {self._trace_flags()}")
         return result
 
     def step(self) -> bool:
@@ -1295,6 +1391,12 @@ class CPU:
         all_labels.update(self.data_labels)
         bytecode = encode_program(self.instructions, self.entry_pc, all_labels)
         mem_image = self.memory.get_snapshot()
+        self.logger.debug(
+            f"Native run: bytecode={len(bytecode)}B mem={len(mem_image)}B "
+            f"entry={self.entry_pc} sp=0x{self.sp:x} "
+            f"heap=0x{self.heap_ptr:x} max_steps={self.config.max_instructions}")
+        import time as _time
+        t0 = _time.perf_counter()
         result = engine.run(
             bytecode=bytecode,
             mem=mem_image,
@@ -1304,13 +1406,23 @@ class CPU:
             input_data=self.input_buffer.encode('utf-8'),
             max_steps=self.config.max_instructions,
         )
+        elapsed = _time.perf_counter() - t0
         if result is None:
+            self.logger.debug("Native run failed (result None)")
             return None
+
+        self.logger.debug(
+            f"Native result: status={result.get('status')} "
+            f"halted={result.get('halted')} steps={result.get('steps')} "
+            f"pc={result.get('pc')} elapsed={elapsed * 1000:.2f}ms "
+            f"error={result.get('error')}")
 
         if result.get('error') == 'unsupported':
             # 原生库遇到不支持的指令: 同步状态后回退解释执行
             self._apply_native_state(result)
-            self.logger.debug("Native engine hit unsupported opcode, falling back")
+            self.logger.debug(
+                f"Native engine hit unsupported opcode, falling back to "
+                f"interpreter at PC=0x{result.get('pc', 0):x}")
             return None
 
         # 应用原生执行结果
@@ -1360,10 +1472,13 @@ class CPU:
             self.logger.info("User interrupt")
             self.console.print(f"\n{Colors.colorize('User interrupt', Colors.YELLOW)}")
         except Exception as e:
-            self.logger.error(f"Execution error: {e}")
-            self.console.print(f"{Colors.colorize(f'Execution error: {e}', Colors.RED)}")
             if self.config.debug_mode:
-                self.console.print(traceback.format_exc())
+                # 超详细: rich 彩色完整堆栈
+                self.logger.exception(f"Execution error: {e}")
+            else:
+                self.logger.error(f"Execution error: {e}")
+                self.console.print(Panel(
+                    f"{e}", title="Execution Error", border_style='red'))
         finally:
             self.running = False
             self.stats.stop()
