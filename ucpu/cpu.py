@@ -1425,6 +1425,12 @@ class CPU:
                 f"interpreter at PC=0x{result.get('pc', 0):x}")
             return None
 
+        if result.get('error'):
+            # 原生运行时错误 (status=3): 同步状态并按解释器行为抛出
+            self._apply_native_state(result)
+            self.native_used = True
+            raise ExecutionError(result.get('error') or 'native runtime error')
+
         # 应用原生执行结果
         self._apply_native_state(result)
         self.native_used = True
