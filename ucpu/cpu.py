@@ -1275,7 +1275,9 @@ class CPU:
             return None
 
         from .native import encode_program
-        bytecode = encode_program(self.instructions, self.entry_pc)
+        all_labels = dict(self.labels)
+        all_labels.update(self.data_labels)
+        bytecode = encode_program(self.instructions, self.entry_pc, all_labels)
         mem_image = self.memory.get_snapshot()
         result = engine.run(
             bytecode=bytecode,
