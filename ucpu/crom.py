@@ -99,7 +99,9 @@ def load_crom(memory: 'FastMemory', path: str, logger: Optional['Logger'] = None
 
 def save_bin(cpu: 'CPU', path: str, logger: Optional['Logger'] = None) -> None:
     from .native import encode_program
-    bytecode = encode_program(cpu.instructions, cpu.entry_pc)
+    all_labels = dict(cpu.labels)
+    all_labels.update(cpu.data_labels)
+    bytecode = encode_program(cpu.instructions, cpu.entry_pc, all_labels)
     mem_image = bytes(cpu.memory.get_snapshot())
 
     with open(path, 'wb') as f:

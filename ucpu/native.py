@@ -89,18 +89,25 @@ def decode_operand(kind: int, value: int, extra: int) -> Operand:
     raise ValueError(f"Unknown operand kind: {kind}")
 
 
-def encode_program(instructions: List[Instruction], entry: int = 0) -> bytes:
+def encode_program(instructions: List[Instruction], entry: int = 0,
+                   labels: Optional[Dict[str, int]] = None) -> bytes:
+    """编码程序为字节码。labels 用于将 ('label', name) 操作数解析为立即数。"""
     out = bytearray()
     out += BC_MAGIC
     out += struct.pack('<B', BC_VERSION)
     out += struct.pack('<I', entry & 0xFFFFFFFF)
     out += struct.pack('<I', len(instructions) & 0xFFFFFFFF)
+    labels = labels or {}
     for opcode, args in instructions:
         op_enum = Constants.OPCODE_NAME_TO_ENUM.get(opcode)
         if op_enum is None:
             raise ValueError(f"Unknown opcode: {opcode}")
         out += struct.pack('<BB', op_enum.value, len(args))
         for arg in args:
+            if arg[0] == 'label':
+                if arg[1] not in labels:
+                    raise ValueError(f"Undefined label: {arg[1]}")
+                arg = ('imm', labels[arg[1]])
             kind, value, extra = encode_operand(arg)
             out += struct.pack('<Bqq', kind, _i64(value), _i64(extra))
     return bytes(out)
