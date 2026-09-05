@@ -73,8 +73,7 @@ func ucpu_run(bcPtr unsafe.Pointer, bcLen C.int,
 	binary.LittleEndian.PutUint64(buf[pos+8:], sp2)
 	binary.LittleEndian.PutUint64(buf[pos+16:], heap)
 	binary.LittleEndian.PutUint64(buf[pos+24:], steps)
-	pos += 32
-	pos += 4 // 36
+	pos = 36 // 状态头 36 字节: status+pad(4) + 4×u64(32)
 	if state != nil {
 		for i := 0; i < 33; i++ {
 			binary.LittleEndian.PutUint64(buf[pos+i*8:], state.regs[i])
