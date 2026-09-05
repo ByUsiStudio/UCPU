@@ -61,8 +61,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     console = Console()
 
-    positional = [a for a in args if not a.startswith('--') and not a.startswith('-')
-                  or a in ('-',)]
     # 去掉选项及其值后, 第一个位置参数即程序文件
     program_file: Optional[str] = None
     skip_next = False
