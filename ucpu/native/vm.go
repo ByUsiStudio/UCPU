@@ -594,7 +594,7 @@ func (vm *vmState) execute(ins instruction) (bool, string) {
 	case opHALT:
 		return true, ""
 	// load/store
-	case opLOAD, opLW:
+	case opLOAD:
 		addr, e := vm.loadStoreAddr(args[1])
 		if e != "" {
 			return false, e
@@ -604,6 +604,19 @@ func (vm *vmState) execute(ins instruction) (bool, string) {
 		}
 		v := uint64(binary.LittleEndian.Uint32(vm.mem[addr : addr+4]))
 		vm.setReg(int(args[0].value), v)
+	case opLW:
+		addr, e := vm.loadStoreAddr(args[1])
+		if e != "" {
+			return false, e
+		}
+		if e := vm.checkAddr(addr, 4); e != "" {
+			return false, e
+		}
+		v := int64(binary.LittleEndian.Uint32(vm.mem[addr : addr+4]))
+		if v&0x80000000 != 0 {
+			v -= 1 << 32
+		}
+		vm.setReg(int(args[0].value), uint64(v)&mask64)
 	case opSTORE, opSW:
 		addr, e := vm.loadStoreAddr(args[1])
 		if e != "" {
