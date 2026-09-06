@@ -7,3 +7,5 @@ __pycache__/
 /test_*.asm
 /out_*.txt
 /*.asm
+/.tmp_*.py
+/.tmp/
