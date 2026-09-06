@@ -1144,6 +1144,16 @@ class CPU:
 
     # ==================== SYS 宿主调用 ====================
 
+    def _heap_dup_string(self, data: bytes) -> int:
+        """在堆上分配 NUL 结尾字符串副本, 返回指针。"""
+        size = (len(data) + 15) & ~0xF
+        ptr = self.heap_ptr
+        self.heap_ptr += size
+        if self.heap_ptr > self.sp:
+            raise ExecutionError("Heap exhausted (string operation)")
+        self.memory.write_block(ptr, data)
+        return ptr
+
     def _sys_buffer(self) -> int:
         idx = self._sys_buf_idx % len(self._sys_buffers)
         self._sys_buf_idx += 1
@@ -1268,6 +1278,27 @@ class CPU:
             msg = self.memory.read_string(x0, 512)
             raise ExecutionError(f"Runtime abort: {msg}" if msg
                                  else "Runtime abort")
+        elif call_id == Syscall.SUBSTR:
+            # substr(s, start, len): 越界自动裁剪
+            s = self.memory.read_string(x0)
+            n = len(s)
+            start = 0 if x1 < 0 else (n if x1 > n else x1)
+            length = 0 if x2 < 0 else x2
+            self._set_reg(0, self._heap_dup_string(
+                s[start:start + length].encode('utf-8') + b'\x00'))
+        elif call_id == Syscall.INDEXOF:
+            hay = self.memory.read_string(x0)
+            needle = self.memory.read_string(x1)
+            idx = hay.find(needle)
+            self._set_reg(0, idx)
+        elif call_id == Syscall.TOUPPER:
+            data = self.memory.read_string(x0)
+            self._set_reg(0, self._heap_dup_string(
+                data.upper().encode('utf-8') + b'\x00'))
+        elif call_id == Syscall.TOLOWER:
+            data = self.memory.read_string(x0)
+            self._set_reg(0, self._heap_dup_string(
+                data.lower().encode('utf-8') + b'\x00'))
         else:
             raise ExecutionError(f"Unknown SYS call id: {call_id}")
         return True

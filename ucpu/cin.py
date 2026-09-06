@@ -20,6 +20,7 @@
 """
 
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -275,6 +276,62 @@ def tokenize(source: str) -> List[Token]:
         filtered.append(tok)
     filtered.append(Token('EOF', None, line))
     return filtered
+
+
+# ==================== import 预处理 (B2) ====================
+# import "path.cin" 仅在文件顶部/列首识别; 相对源文件目录或仓库 lib/ 目录解析;
+# 同一文件每个编译仅包含一次, 循环引用报错。
+
+_IMPORT_RE = re.compile(r'^import\s+["\']([^"\']+)["\']\s*;?\s*$')
+
+_UCPU_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_import(name: str, source_dir: str, lib_dir: str) -> str:
+    candidates = [os.path.join(source_dir, name),
+                  os.path.join(lib_dir, name) if lib_dir else '',
+                  os.path.join(_UCPU_ROOT, name)]
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            return cand
+    raise CompilerError(f"Import file not found: {name!r} (searched "
+                        f"{source_dir}, {lib_dir}, {_UCPU_ROOT})")
+
+
+def _expand_module_text(text: str, source_dir: str, lib_dir: str,
+                        loaded: set, active: set) -> str:
+    out = []
+    for line in text.split('\n'):
+        m = _IMPORT_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        path = _resolve_import(m.group(1), source_dir, lib_dir)
+        real = os.path.realpath(path)
+        if real in active:
+            raise CompilerError(f"Circular import: {m.group(1)!r} ({real})")
+        if real in loaded:
+            continue                     # 防重复包含
+        active.add(real)
+        with open(path, 'r', encoding='utf-8') as f:
+            sub = f.read()
+        out.append(_expand_module_text(
+            sub, os.path.dirname(real), lib_dir, loaded, active))
+        active.discard(real)
+        loaded.add(real)
+    return '\n'.join(out)
+
+
+def load_program_source(path: str) -> str:
+    """读取 CIN 文件并展开 import (返回可直接 tokenize 的源码文本)。"""
+    abs_path = os.path.abspath(path)
+    real = os.path.realpath(abs_path)
+    with open(real, 'r', encoding='utf-8') as f:
+        text = f.read()
+    loaded = {real}
+    return _expand_module_text(
+        text, os.path.dirname(real),
+        os.path.join(_UCPU_ROOT, 'lib'), loaded, {real})
 
 
 # ==================== 语法分析 ====================
@@ -837,8 +894,7 @@ class CINCompiler:
         self.logger = logger
 
     def compile(self, filename: str, bounds_check: bool = False) -> CompileResult:
-        with open(filename, 'r', encoding='utf-8') as f:
-            source = f.read()
+        source = load_program_source(filename)
         return self.compile_source(source, filename, bounds_check=bounds_check)
 
     def compile_source(self, source: str, filename: str = '<cin>',
@@ -1900,7 +1956,7 @@ class CodeGen:
         if name in ('strlen', 'strcmp', 'rand', 'time', 'abs', 'input'):
             return 'int'
         if name in ('strcpy', 'int_to_str', 'itoa', 'float_to_str', 'ftoa',
-                    'bool_to_str'):
+                    'bool_to_str', 'substr', 'upper', 'lower'):
             return 'string'
         return None
 
@@ -1973,6 +2029,30 @@ class CodeGen:
         if name in ('bool_to_str',):
             self.gen_value(args[0])
             self.emit('SYS', self.imm(Syscall.BOOL_STR))
+            return 'string'
+        if name == 'substr':
+            self._gen_string_value(args[0])
+            self.emit('PUSH', self.reg(0))
+            self.gen_value(args[1])
+            self.emit('PUSH', self.reg(0))
+            self.gen_value(args[2])
+            self.emit('MOV', self.reg(2), self.reg(0))
+            self.emit('POP', self.reg(1))
+            self.emit('POP', self.reg(0))
+            self.emit('SYS', self.imm(Syscall.SUBSTR))
+            return 'string'
+        if name == 'indexof':
+            self._gen_string_value(args[0])
+            self.emit('PUSH', self.reg(0))
+            self._gen_string_value(args[1])
+            self.emit('MOV', self.reg(1), self.reg(0))
+            self.emit('POP', self.reg(0))
+            self.emit('SYS', self.imm(Syscall.INDEXOF))
+            return 'int'
+        if name in ('upper', 'lower'):
+            self._gen_string_value(args[0])
+            self.emit('SYS', self.imm(Syscall.TOUPPER if name == 'upper'
+                                       else Syscall.TOLOWER))
             return 'string'
         if name == 'time':
             self.emit('SYS', self.imm(Syscall.TIME))

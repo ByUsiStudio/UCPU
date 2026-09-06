@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from tests.helpers import asm_program, run_cin_source
+from tests.helpers import asm_program, run_cin_file
 
 EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'examples')
@@ -13,6 +13,7 @@ EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 CIN_EXPECTED = {
     'control_flow.cin': 24,     # sum=20(偶数至20 break) + d=4
     'literals_types.cin': 77,   # 31+13+15+6+6+4+2
+    'modules_demo.cin': 12,     # import lib/math.cin + lib/str.cin
 }
 ASM_EXPECTED = {
     'asm_constants.asm': ('x0', 63),
@@ -22,9 +23,7 @@ ASM_EXPECTED = {
 @pytest.mark.parametrize('name,expected', sorted(CIN_EXPECTED.items()))
 def test_example_cin(name, expected):
     path = os.path.join(EXAMPLES, name)
-    with open(path, 'r', encoding='utf-8') as f:
-        source = f.read()
-    cpu = run_cin_source(source)
+    cpu = run_cin_file(path)   # 文件级运行: 支持 import 展开
     assert cpu.regs.read(0) == expected, f'{name}: X0={cpu.regs.read(0)}'
 
 

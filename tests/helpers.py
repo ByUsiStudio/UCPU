@@ -61,6 +61,15 @@ def asm_program(source: str, workdir: str, name: str = 'prog.asm', **cfg) -> CPU
     return CPU(Config(**defaults), path)
 
 
+def run_cin_file(path: str, **cfg) -> CPU:
+    """从文件编译并运行 CIN 源码 (支持 import 展开与三执行路径)。"""
+    defaults = dict(interactive_mode=False, log_level='ERROR', use_native=False)
+    defaults.update(cfg)
+    cpu = CPU(Config(**defaults), path)
+    cpu.run()
+    return cpu
+
+
 def snapshot(cpu: CPU) -> dict:
     """执行后的确定性状态 (用于多路径一致性比较)。"""
     return {

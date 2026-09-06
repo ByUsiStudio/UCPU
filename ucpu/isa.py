@@ -149,6 +149,10 @@ class Syscall(IntEnum):
     STR_CONCAT = 25  # strcat_alloc(x0=a, x1=b) -> 新堆块 ptr (NUL 结尾)
     BOOL_STR = 26   # bool_str(x0) -> "true"/"false" 静态缓冲 ptr
     ABORT = 27      # abort(x0=消息指针): 抛 ExecutionError (assert/边界检查)
+    SUBSTR = 28     # substr(x0=s, x1=start, x2=len) -> 新堆字符串 (越界裁剪)
+    INDEXOF = 29    # indexof(x0=hay, x1=needle) -> 首位置或 -1
+    TOUPPER = 30    # upper(x0=s) -> 新堆字符串 (ASCII 大写)
+    TOLOWER = 31    # lower(x0=s) -> 新堆字符串 (ASCII 小写)
 
 
 class Cond:

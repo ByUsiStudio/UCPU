@@ -395,6 +395,9 @@ string copy = strcpy(s)         // 拷贝为新堆块
 | `int_to_str(n)` (别名 `itoa`) | string | 整数 → 十进制字符串 |
 | `float_to_str(f)` (别名 `ftoa`) | float | 浮点 → 字符串 (自动提升 int/bool) |
 | `bool_to_str(b)` | string | 布尔 → `"true"` / `"false"` |
+| `substr(s, start, len)` | string | 子串 (新堆块, 越界自动裁剪) |
+| `indexof(hay, needle)` | int | 首次出现位置, 未找到为 `-1` |
+| `upper(s)` / `lower(s)` | string | ASCII 大小写转换 (新堆块) |
 
 内建在表达式任意位置可用; 数值参数按需自动提升为 float。
 
@@ -462,6 +465,32 @@ python cpu.py prog.cin --save             # 运行后保存 prog.crom 内存镜�
 │ prog.cin:12: Compiler error: Unknown function: printline   │
 └────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 模块与标准库 (import)
+
+`import "path.cin"` 只能出现在**文件顶部 (列首)**。解析顺序: 源文件目录 →
+仓库 `lib/` 目录 → 仓库根; 同一文件每个编译仅包含一次 (防重复), 循环引用报错。
+
+```cin
+// main.cin
+import "lib/math.cin"     // f_abs/f_floor/f_ceil/f_round/f_min/f_max/i_min/i_max/i_clamp
+import "lib/str.cin"      // s_upper/s_lower/s_contains/s_starts_with/s_ends_with/
+                          // s_count/s_repeat
+import "helpers.cin"      // 自建模块 (放同目录)
+
+function main() -> int {
+    int v = f_floor(3.9)
+    string up = s_upper("hi")
+    println(float_to_str(f_round(2.5)) + " " + up + " " + int_to_str(v))
+    return v
+}
+```
+
+- 模块文件本身可用 `import` 层层引用 (DAG); 编译主文件时按需展开, 不做独立编译单元;
+- 库函数名建议 `f_*` (浮点) / `s_*` (字符串) / `i_*` (整数) 前缀避免冲突;
+- 模块示例: `examples/modules_demo.cin`; 仓库自带 `lib/` 见上注释。
 
 ---
 

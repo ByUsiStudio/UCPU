@@ -425,17 +425,22 @@ ruff check ucpu cpu.py script tests
 **日志与调试**
 - `--debug` - 超详细 rich 调试 (逐指令/寄存器/内存/栈/缓存)
 - `--step` - 交互式单步调试
+- `--debug-server <port>` - 启动 TCP 远程调试服务 (驱动式: step/continue/break/regs/mem/history)
 - `--log-level DEBUG|INFO|WARNING|ERROR` - 日志级别
 - `--log-file <file>` - 日志输出到文件
 
-**性能分析**
+**性能与行为**
 - `--profile` - 性能统计
 - `--cache-size 128` - 配置缓存大小
 - `--mem-size <bytes>` - 内存大小
 - `--max-instructions <n>` - 指令数上限
+- `--seed <n>` - 随机种子 (确定性执行)
+- `--bounds-check` - CIN 数组越界运行时检查
+- `--mmu` - 启用 MMU 分页 (identity 页表, 未映射页缺页错误)
 
 **编译选项**
 - `--compile` / `--compile-only` - 编译为 .bin 字节码
+- `--disasm` - 反汇编 .bin/UCBC 为文本清单后退出
 - `-o, --output <file>` - 输出文件名
 - `--no-io` - 禁止宿主 I/O
 - `--strict` - 严格汇编模式
@@ -691,7 +696,8 @@ xychart-beta
 >
 > **CIN 新语法示例**: `examples/control_flow.cin` (break/continue、do-while、switch/case、三目、复合赋值)、
 > `examples/literals_types.cin` (char/short/long/unsigned、0x/0b/0o 与字符字面量、`++/--`、转换内建函数);
-> 汇编器 `.equ`/表达式示例: `examples/asm_constants.asm`。
+> 汇编器 `.equ`/表达式示例: `examples/asm_constants.asm`; 模块/标准库示例: `examples/modules_demo.cin`
+> (`lib/math.cin`、`lib/str.cin`)。
 
 ### 程序执行流程图
 

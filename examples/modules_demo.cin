@@ -1,0 +1,33 @@
+// import + lib/ 标准库演示 (B2)
+// 运行: python cpu.py examples/modules_demo.cin
+
+import "lib/math.cin"
+import "lib/str.cin"
+
+function main() -> int {
+    println("abs=" + float_to_str(f_abs(-3.25)))
+    println("floor(2.7)=" + float_to_str(f_floor(2.7))
+            + " ceil(2.1)=" + float_to_str(f_ceil(2.1)))
+    println("round(2.5)=" + float_to_str(f_round(2.5))
+            + " max=" + float_to_str(f_max(1.5, 4.25)))
+    println("clamp=" + int_to_str(i_clamp(99, 0, 10)))
+
+    string up = s_upper("aBcDe")
+    string word = s_lower("HeLLo")
+    println("upper=" + up + " lower=" + word)
+    println("indexof(world)=" + int_to_str(indexof("hello world", "world")))
+    println("contains(bana)=" + int_to_str(s_contains("banana", "nan")))
+    println("ends_with(.txt)=" + int_to_str(s_ends_with("readme.txt", ".txt"))
+            + " count(aa in aaa)=" + int_to_str(s_count("aaa", "aa")))
+
+    string rep = s_repeat("ab", 3)
+    println("repeat(ab,3)=" + rep)
+
+    int total = strlen(s_upper("abc"))     // 3
+    total = total + indexof("banana", "ana") // 4
+    total = total + s_count("aaa", "aa")    // 5
+    total = total + strlen(s_repeat("x", 4))  // 9
+    int fl = f_floor(3.9)                   // 12
+    total = total + fl
+    return total
+}
