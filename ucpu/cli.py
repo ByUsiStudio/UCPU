@@ -12,7 +12,7 @@ from typing import List, Optional
 from .config import Config
 from .console import Colors, Console, Panel
 
-HELP_INTRO = f"""{Colors.colorize('UCPU Simulator v5.0', Colors.CYAN, True)}
+HELP_INTRO = f"""{Colors.colorize('UCPU Simulator v5.2', Colors.CYAN, True)}
 
 {Colors.colorize('Usage:', Colors.YELLOW)}
   python cpu.py <program.[cin|pl|asm|bin]> [options]
