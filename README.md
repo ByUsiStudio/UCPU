@@ -132,8 +132,8 @@ flowchart TB
     
     subgraph ISA[指令集层]
         BASE[Base ISA<br/>28条指令]
-        ARM64[ARM64 Ext<br/>28条指令]
-        RISCV[RISC-V Ext<br/>28条指令]
+        ARM64[ARM64 Ext<br/>40条指令]
+        RISCV[RISC-V Ext<br/>27条指令]
         FP[FP Ext<br/>10条指令]
         VEC[Vector Ext<br/>6条指令]
     end
@@ -197,23 +197,28 @@ sequenceDiagram
 ```mermaid
 pie title UCPU 指令集组成
     "Base ISA (28条)" : 28
-    "ARM64 Ext (28条)" : 28
-    "RISC-V Ext (28条)" : 28
+    "ARM64 Ext (40条)" : 40
+    "RISC-V Ext (27条)" : 27
     "FP Ext (10条)" : 10
     "Vector Ext (6条)" : 6
+    "SYS 宿主调用 (1条)" : 1
 ```
+
+> 指令总数与分组由 `python script/gen_isa_docs.py` 依据 `ucpu/isa.py` 自动生成/校验;
+> 完整的逐条指令表见 [docs/ISA.md](docs/ISA.md)。ARM64 的 WFE/WFI/SEV 无事件模型, 语义等同 NOP。
 
 ### 指令分类
 
 ```mermaid
 graph TD
-    ISA[UCPU ISA<br/>111条指令]
+    ISA[UCPU ISA<br/>112条指令]
     
     ISA --> BASE[Base ISA<br/>28条指令]
-    ISA --> ARM[ARM64 Ext<br/>28条指令]
-    ISA --> RISCV[RISC-V Ext<br/>28条指令]
+    ISA --> ARM[ARM64 Ext<br/>40条指令]
+    ISA --> RISCV[RISC-V Ext<br/>27条指令]
     ISA --> FP[FP Ext<br/>10条指令]
     ISA --> VEC[Vector Ext<br/>6条指令]
+    ISA --> SYS[SYS 宿主调用<br/>1条指令]
     
     BASE --> B1[数据传输: MOV, LOAD, STORE]
     BASE --> B2[算术: ADD, SUB, MUL, DIV]
@@ -250,11 +255,13 @@ graph TD
 | I/O | IN, OUT | 输入输出 |
 | 其他 | CMP, INC, DEC, HALT | 比较、自增、自减、停机 |
 
-### ARM64扩展 (28条)
+### ARM64扩展 (40条)
 
 ADDS, SUBS, ADDC, SUBC, LSL, LSR, ASR, ROR, MVN, EOR, BIC, ORN, LDR, STR, LDP, STP, CBZ, CBNZ, TBZ, TBNZ, B, BL, BR, NOP, WFE, WFI, SEV, CSEL, CSINC, CSINV, CSNEG, SXTB, SXTH, SXTW, UXTB, UXTH, CLZ, CLS, RBIT, REV
 
-### RISC-V扩展 (28条)
+> WFE/WFI/SEV: 模拟器无中断/多核事件模型, 语义等同 NOP (见 `ucpu/cpu.py` `_OP_ALIASES`)。
+
+### RISC-V扩展 (27条)
 
 LB, LH, LW, LD, SB, SH, SW, SD, ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI, BEQ, BNE, BLT, BGE, BLTU, BGEU, JALR, JAL, LUI, AUIPC
 
