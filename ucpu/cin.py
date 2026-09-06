@@ -103,11 +103,22 @@ class Token:
     kind: str
     value: Any
     line: int
+    filename: Optional[str] = None
 
 
-def tokenize(source: str) -> List[Token]:
+def tokenize(source: str,
+             origin: Optional[List[Optional[Tuple[str, int]]]] = None
+             ) -> List[Token]:
     tokens: List[Token] = []
     i, line, n = 0, 1, len(source)
+
+    def at_loc(ln: int) -> str:
+        if origin and 0 < ln < len(origin):
+            ent = origin[ln]
+            if ent is not None:
+                f, l = ent
+                return f"{f}:{l}"
+        return f"line {ln}"
 
     def skip_comment_block():
         nonlocal i, line
@@ -163,7 +174,8 @@ def tokenize(source: str) -> List[Token]:
                     i += 1
                 if i == dstart or not any(ch != '_' for ch in
                                           source[dstart:i]):
-                    raise CompilerError(f"Malformed numeric literal at line {line}")
+                    raise CompilerError(f"Malformed numeric literal at "
+                                        f"{at_loc(line)}")
                 # 后缀 (u/U/l/L, f/F): 64 位槽模型忽略宽度差异
                 while i < n and source[i] in 'uUlL':
                     i += 1
@@ -208,7 +220,8 @@ def tokenize(source: str) -> List[Token]:
             start_line = line
             i += 1
             if i >= n:
-                raise CompilerError(f"Unterminated char literal at line {start_line}")
+                raise CompilerError(f"Unterminated char literal at "
+                                    f"{at_loc(start_line)}")
             if source[i] == '\\' and i + 1 < n:
                 esc = source[i + 1]
                 val = {'n': 10, 't': 9, 'r': 13, '0': 0, 'a': 7, 'b': 8,
@@ -219,7 +232,8 @@ def tokenize(source: str) -> List[Token]:
                 val = ord(source[i])
                 i += 1
             if i >= n or source[i] != "'":
-                raise CompilerError(f"Unterminated char literal at line {start_line}")
+                raise CompilerError(f"Unterminated char literal at "
+                                    f"{at_loc(start_line)}")
             i += 1
             tokens.append(Token('NUMBER', val, line))
         elif c in ('+', '-', '*', '/', '%') and i + 1 < n and source[i + 1] == '=':
@@ -248,7 +262,7 @@ def tokenize(source: str) -> List[Token]:
         elif c in _SINGLE_OPS:
             tokens.append(Token(_SINGLE_OPS[c], c, line)); i += 1
         else:
-            raise CompilerError(f"Unexpected character {c!r} at line {line}")
+            raise CompilerError(f"Unexpected character {c!r} at {at_loc(line)}")
 
     # 行连接: 圆/方括号深度内或行尾为运算符时 NL 无效;
     # 花括号 {} 块内的 NL 必须保留 (语句以换行终止)
@@ -298,40 +312,64 @@ def _resolve_import(name: str, source_dir: str, lib_dir: str) -> str:
                         f"{source_dir}, {lib_dir}, {_UCPU_ROOT})")
 
 
-def _expand_module_text(text: str, source_dir: str, lib_dir: str,
-                        loaded: set, active: set) -> str:
-    out = []
-    for line in text.split('\n'):
+def _collect_module_lines(path: str, loaded: set, active: set,
+                          out: List[Tuple[str, str]]) -> None:
+    """深度优先收集 (源文件, 文本行) 序列 (import 处内联展开)。
+
+    防重复: 每个 realpath 每编译一次仅包含一次; 循环引用报错。
+    """
+    real = os.path.realpath(os.path.abspath(path))
+    if real in active:
+        raise CompilerError(f"Circular import: {path} ({real})")
+    if real in loaded:
+        return
+    active.add(real)
+    with open(real, 'r', encoding='utf-8') as f:
+        lines = f.read().split('\n')
+    for line in lines:
         m = _IMPORT_RE.match(line)
-        if not m:
-            out.append(line)
+        if m:
+            target = _resolve_import(
+                m.group(1), os.path.dirname(real),
+                os.path.join(_UCPU_ROOT, 'lib'))
+            _collect_module_lines(target, loaded, active, out)
             continue
-        path = _resolve_import(m.group(1), source_dir, lib_dir)
-        real = os.path.realpath(path)
-        if real in active:
-            raise CompilerError(f"Circular import: {m.group(1)!r} ({real})")
-        if real in loaded:
-            continue                     # 防重复包含
-        active.add(real)
-        with open(path, 'r', encoding='utf-8') as f:
-            sub = f.read()
-        out.append(_expand_module_text(
-            sub, os.path.dirname(real), lib_dir, loaded, active))
-        active.discard(real)
-        loaded.add(real)
-    return '\n'.join(out)
+        out.append((real, line))
+    active.discard(real)
+    loaded.add(real)
+
+
+def load_program_source_mapped(path: str) -> Tuple[str, List[Optional[Tuple[str, int]]]]:
+    """读取 CIN 并展开 import, 返回 (文本, 行来源表)。
+
+    origin[merged_line] = (源文件 realpath, 源文件内行号); origin[0] = None。
+    """
+    real = os.path.realpath(os.path.abspath(path))
+    out: List[Tuple[str, str]] = []
+    _collect_module_lines(real, set(), set(), out)
+    counters: Dict[str, int] = {}
+    origin: List[Optional[Tuple[str, int]]] = [None]
+    for fname, _line in out:
+        counters[fname] = counters.get(fname, 0) + 1
+        origin.append((fname, counters[fname]))
+    text = '\n'.join(line for _f, line in out)
+    return text, origin
 
 
 def load_program_source(path: str) -> str:
     """读取 CIN 文件并展开 import (返回可直接 tokenize 的源码文本)。"""
-    abs_path = os.path.abspath(path)
-    real = os.path.realpath(abs_path)
-    with open(real, 'r', encoding='utf-8') as f:
-        text = f.read()
-    loaded = {real}
-    return _expand_module_text(
-        text, os.path.dirname(real),
-        os.path.join(_UCPU_ROOT, 'lib'), loaded, {real})
+    text, _origin = load_program_source_mapped(path)
+    return text
+
+
+def _remap_tokens(tokens: List[Token], origin: List[Optional[Tuple[str, int]]]
+                  ) -> None:
+    """把拼合文本中的 token 行号重定位到源文件 (file, line)。"""
+    for tok in tokens:
+        if 0 < tok.line < len(origin):
+            ent = origin[tok.line]
+            if ent is not None:
+                tok.filename, tok.line = ent[0], ent[1]
 
 
 # ==================== 语法分析 ====================
@@ -384,12 +422,17 @@ class Parser:
         t = self.peek()
         if t.kind != kind:
             raise CompilerError(f"Expected {kind} but got {t.kind} ({t.value!r}) "
-                                f"at line {t.line}")
+                                f"at {self._loc(t)}")
         return self.next()
 
     def skip_nl(self) -> None:
         while self.accept('NL'):
             pass
+
+    def _loc(self, tok: Optional[Token] = None) -> str:
+        """token 的 'file:line' 定位 (import 展开后为真实源文件)。"""
+        t = tok if tok is not None else self.peek()
+        return f"{t.filename or '<cin>'}:{t.line}"
 
     # ---------------- 类型 ----------------
 
@@ -613,8 +656,8 @@ class Parser:
         body = self.parse_stmt()
         self.skip_nl()
         if not (self.peek().kind == 'IDENT' and self.peek().value == 'while'):
-            raise CompilerError("Expected 'while' after do body at line "
-                                f"{self.peek().line}")
+            raise CompilerError("Expected 'while' after do body at "
+                                f"{self._loc()}")
         self.next()
         cond = self.parse_paren_expr()
         self.accept('SEMI')
@@ -648,19 +691,19 @@ class Parser:
             else:
                 if cur is None:
                     raise CompilerError(
-                        "Statement before first case in switch at line "
-                        f"{t.line}")
+                        "Statement before first case in switch at "
+                        f"{self._loc(t)}")
                 cur[2].append(self.parse_stmt())
             self.skip_nl()
         if cur is not None:
             branches.append(cur)
         self.expect('RBRACE')
         if not branches:
-            raise CompilerError(f"Empty switch at line {line}")
+            raise CompilerError(f"Empty switch at {self._loc()}")
         return ('switch', cond, branches)
 
     def parse_assert(self):
-        line = self.peek().line
+        tok = self.peek()
         self.next()  # assert
         self.expect('LPAREN')
         cond = self.parse_expr()
@@ -669,7 +712,7 @@ class Parser:
             msg = self.parse_expr()
         self.expect('RPAREN')
         self.accept('SEMI')
-        return ('assert', cond, msg, line)
+        return ('assert', cond, msg, tok.line, tok.filename)
 
     def parse_if(self):
         self.next()
@@ -872,7 +915,8 @@ class Parser:
                 self.expect('RPAREN')
                 return ('call', name, args)
             return ('var', name)
-        raise CompilerError(f"Unexpected token {t.kind} ({t.value!r}) at line {t.line}")
+        raise CompilerError(f"Unexpected token {t.kind} ({t.value!r}) "
+                            f"at {self._loc(t)}")
 
 
 RBRACE_TOKENS = None
@@ -894,14 +938,19 @@ class CINCompiler:
         self.logger = logger
 
     def compile(self, filename: str, bounds_check: bool = False) -> CompileResult:
-        source = load_program_source(filename)
-        return self.compile_source(source, filename, bounds_check=bounds_check)
+        source, origin = load_program_source_mapped(filename)
+        return self.compile_source(source, filename,
+                                   bounds_check=bounds_check, origin=origin)
 
     def compile_source(self, source: str, filename: str = '<cin>',
-                       bounds_check: bool = False) -> CompileResult:
+                       bounds_check: bool = False,
+                       origin: Optional[List[Optional[Tuple[str, int]]]] = None
+                       ) -> CompileResult:
         dbg = self.logger.debug if (self.logger and self.logger.is_debug) \
             else (lambda msg: None)
-        tokens = tokenize(source)
+        tokens = tokenize(source, origin)
+        if origin:
+            _remap_tokens(tokens, origin)
         dbg(f"CIN tokenize: {len(tokens)} tokens")
         parser = Parser(tokens)
         structs, globals_, functions = parser.parse_program()
@@ -1225,7 +1274,8 @@ class CodeGen:
         elif kind == 'cpu':
             self.gen_cpu_stmt(s[1], s[2])
         elif kind == 'assert':
-            self.gen_assert(s[1], s[2], s[3])
+            self.gen_assert(s[1], s[2], s[3],
+                            s[4] if len(s) > 4 else self._filename)
         elif kind == 'expr':
             self.gen_expr_stmt(s[1])
 
@@ -1458,16 +1508,18 @@ class CodeGen:
         self.emit('MOV', self.reg(0), self.imm(addr))
         self.emit('SYS', self.imm(Syscall.ABORT))
 
-    def gen_assert(self, cond, msg, line: int) -> None:
-        """assert(cond [, msg]) → 条件不成立时运行时中止。"""
+    def gen_assert(self, cond, msg, line: int,
+                   filename: Optional[str] = None) -> None:
+        """assert(cond [, msg]) → 条件不成立时运行时中止 (定位: filename:line)。"""
         l_ok = self.new_label('assertok')
         self.gen_cond_jump_true(cond, l_ok)
         if msg is None:
             self._runtime_abort(
-                f"{self._filename}:{line}: assertion failed")
+                f"{(filename or self._filename)}:{line}: assertion failed")
         else:
             # [prefix] + 消息 (消息支持任意表达式, 自动字符串化)
-            prefix = self._data_string(f"[assert {self._filename}:{line}] ")
+            prefix = self._data_string(
+                f"[assert {(filename or self._filename)}:{line}] ")
             self.emit('MOV', self.reg(0), self.imm(prefix))
             self.emit('PUSH', self.reg(0))
             self._gen_string_value(msg)

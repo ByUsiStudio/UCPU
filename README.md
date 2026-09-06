@@ -20,6 +20,7 @@ UCPU是一个功能完整的CPU模拟器，提供从高级语言到机器码的�
 |------|------|
 | [开发者编译文档 (BUILDING)](docs/BUILDING.md) | 环境搭建、Go 原生库编译、构建产物、打包、日志系统、扩展指南 |
 | [CIN 编程指南 (CIN_GUIDE)](docs/CIN_GUIDE.md) | CIN 高级语言完整语法：类型/函数/struct/数组/字符串/内建函数 |
+| [远程调试协议 (REMOTE_DEBUG)](docs/REMOTE_DEBUG.md) | `--debug-server` 换行文本协议：命令/响应/状态机/示例会话 |
 
 ---
 

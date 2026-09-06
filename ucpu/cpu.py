@@ -173,7 +173,8 @@ class CPU:
                 crom_file = candidate
         if crom_file and os.path.exists(crom_file):
             from . import crom as crom_mod
-            crom_mod.load_crom(self.memory, crom_file, self.logger)
+            crom_mod.load_crom(self.memory, crom_file, self.logger,
+                               enable_mmu=self.config.mmu)
 
         asm = Assembler(self.memory, self.console, strict=self.config.strict_mode,
                         logger=self.logger)

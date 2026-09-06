@@ -234,7 +234,7 @@ python cpu.py basic.bin                               # 直接运行字节码
 | 0x00 | 4 | Magic | `'CROM'` |
 | 0x04 | 1 | Version | `0x03` |
 | 0x05 | 4 | Memory Size | 内存字节数 |
-| 0x09 | 1 | Flags | bit0: zlib 压缩 |
+| 0x09 | 1 | Flags | bit0: zlib 压缩; bit1: 尾部含 MMU 页表元数据 (校验和覆盖含尾部) |
 | 0x0A | 4 | Checksum | CRC32 |
 | 0x0E | 2 | Reserved | 保留 |
 | 0x10 | N | Data | 压缩/原始内存 |
