@@ -72,6 +72,9 @@ class CPU:
         self._trace = self.logger.is_debug
 
         self.memory = FastMemory(config.mem_size)
+        if config.mmu:
+            from .memory import Mmu
+            self.memory.attach_mmu(Mmu(config.mem_size))
         self.cache = Cache(config.cache_size, config.cache_assoc)
         # 内存访问日志 (DEBUG 级别生效)
         self.memory.attach_logger(self.logger)
@@ -1390,7 +1393,8 @@ class CPU:
         native_outcome = None
         if (self.config.use_native and not self.config.debug_mode
                 and not self.config.step_mode
-                and not self.config.bounds_check):
+                and not self.config.bounds_check
+                and not self.config.mmu):
             native_outcome = self._try_native_run()
 
         try:

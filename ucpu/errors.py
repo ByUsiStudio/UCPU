@@ -50,5 +50,9 @@ class MemoryAccessError(CPUSimulatorError):
     """内存访问错误 (越界 / 保护违例)。"""
 
 
+class PageFaultError(MemoryAccessError):
+    """MMU 缺页/物理越界 (B1 分页)。"""
+
+
 # 向后兼容别名 (旧代码引用 MemoryError)
 MemoryError = MemoryAccessError

@@ -37,6 +37,8 @@ class Config:
     seed: Optional[int] = None
     # A1: CIN 运行时断言/边界检查开关
     bounds_check: bool = False
+    # B1: MMU/分页 (默认 identity 映射; unmap/protect 需测试或宿主侧设置)
+    mmu: bool = False
     # A4: 远程调试服务端口 (None = 不启动)
     debug_server_port: Optional[int] = None
 
