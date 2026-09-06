@@ -34,73 +34,8 @@ class Config:
     compile_to_bin: bool = False
     compile_only: bool = False
 
-    @classmethod
-    def from_args(cls, args: List[str]) -> 'Config':
-        config = cls()
-        i = 1
-        while i < len(args):
-            arg = args[i]
-            if arg == '--step':
-                config.step_mode = True
-                config.interactive_mode = True
-            elif arg == '--debug':
-                config.debug_mode = True
-                config.interactive_mode = True
-            elif arg == '--save':
-                config.auto_save_crom = True
-            elif arg == '--sandbox':
-                config.sandbox_mode = True
-            elif arg == '--jit':
-                config.enable_jit = True
-            elif arg == '--no-native':
-                config.use_native = False
-            elif arg == '--profile':
-                config.profile = True
-            elif arg == '--no-compress':
-                config.compress_crom = False
-            elif arg == '--compile':
-                config.compile_to_bin = True
-            elif arg == '--compile-only':
-                config.compile_only = True
-            elif arg in ('--output', '-o') and i + 1 < len(args):
-                config.output_file = args[i + 1]
-                i += 1
-            elif arg == '--optimize' and i + 1 < len(args):
-                try:
-                    config.optimize = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 1
-            elif arg == '--mem-size' and i + 1 < len(args):
-                try:
-                    config.mem_size = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 1
-            elif arg == '--max-instructions' and i + 1 < len(args):
-                try:
-                    config.max_instructions = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 1
-            elif arg == '--cache-size' and i + 1 < len(args):
-                try:
-                    config.cache_size = int(args[i + 1])
-                except ValueError:
-                    pass
-                i += 1
-            elif arg == '--log-level' and i + 1 < len(args):
-                config.log_level = args[i + 1]
-                i += 1
-            elif arg == '--log-file' and i + 1 < len(args):
-                config.log_file = args[i + 1]
-                i += 1
-            elif arg == '--no-io':
-                config.allow_io = False
-            elif arg == '--strict':
-                config.strict_mode = True
-            i += 1
-        return config
+    # 命令行解析请使用 ucpu/cli.py build_parser() (argparse, 单一来源)。
+    # Config 仅承载运行配置, 由 cli._apply_namespace 填充。
 
     def validate(self) -> None:
         if self.mem_size < 256:

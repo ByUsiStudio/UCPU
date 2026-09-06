@@ -3,7 +3,7 @@
 
 实现已拆分为 ucpu/ 包:
   ucpu.cli       命令行解析与启动
-  ucpu.cpu       CPU 核心 (111 条指令 + SYS 宿主调用)
+  ucpu.cpu       CPU 核心 (112 条指令, 含 SYS 宿主调用)
   ucpu.assembler 汇编器 (.pl/.asm)
   ucpu.cin       CIN 高级语言编译器 (.cin)
   ucpu.native    Go 原生库桥接 (可选加速, Win/Linux/Termux)

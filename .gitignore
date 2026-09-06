@@ -9,3 +9,7 @@ __pycache__/
 /*.asm
 /.tmp_*.py
 .tmp*
+/pytest-cache-*
+/pytest-tmp-*
+*cache*
+*tmp*

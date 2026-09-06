@@ -19,6 +19,7 @@ import math
 import os
 import platform
 import struct
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from .isa import (BC_MAGIC, BC_VERSION, KIND_COND, KIND_FLOAT, KIND_IMM,
@@ -155,6 +156,12 @@ def _lib_candidates() -> List[str]:
     env = os.environ.get('UCPU_NATIVE_LIB')
     if env:
         candidates.insert(0, env)
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包布局: 二进制位于 exe 目录或 _internal 下
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        meipass = getattr(sys, '_MEIPASS', exe_dir)
+        candidates += [os.path.join(meipass, n) for n in names]
+        candidates += [os.path.join(exe_dir, n) for n in names]
     return candidates
 
 

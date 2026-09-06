@@ -111,8 +111,9 @@ python cpu.py --help                 # 完整帮助
 | `--no-native` | 禁用 Go 原生库, 强制纯 Python |
 | `--jit` | 启用 Python JIT (基本块编译) |
 | `--debug` | **超详细 rich 调试**: 逐指令/寄存器/内存/栈/缓存追踪 (强制 DEBUG 日志级别) |
-| `--step` | 交互式单步调试器 |
+| `--step` | 交互式单步执行 (`step>` 命令集与断点调试一致: s/c/p/b/d/q) |
 | `--profile` | 结束后输出性能统计表 |
+| `--sandbox` | 沙箱模式 (限制宿主访问) |
 | `--compile` / `--compile-only` | 编译为 .bin 字节码 |
 | `--crom <file>` | 加载 .crom 内存镜像 |
 | `--save` / `--no-compress` | 保存 .crom / 关闭 zlib 压缩 |
@@ -120,12 +121,18 @@ python cpu.py --help                 # 完整帮助
 | `--mem-size <bytes>` | 内存大小 (默认 65536) |
 | `--max-instructions <n>` | 指令数上限 (防死循环) |
 | `--cache-size <n>` | 缓存行数 |
+| `--cache-assoc <n>` | 缓存关联度 (默认 4) |
+| `--optimize <0-3>` | 优化级别 (默认 0) |
+| `--execution-interval <sec>` | 每指令间隔秒数 (演示减速) |
 | `--no-io` | 禁止 IN/OUT 宿主 I/O |
 | `--strict` | 严格汇编模式 |
 | `--log-level <lvl>` | DEBUG / INFO / WARNING / ERROR |
 | `--log-file <file>` | 日志重定向到文件 |
 
 > 注意: `--debug` 与 `--jit` 互斥 (debug 需要逐指令解释追踪); 同时给出时 debug 优先。
+
+> CLI 参数表唯一来源为 `ucpu/cli.py: build_parser()` (argparse); 本文档仅作摘要,
+> 完整列表与最新选项请以 `python cpu.py --help` 为准。
 
 ---
 
@@ -191,6 +198,11 @@ python -c "from ucpu import native; print(native.load_native_library())"
 
 > 手动编译等价命令: `go build -buildmode=c-shared -o ../ucpu_native.dll .` (在 `ucpu/native/` 目录)。
 
+> **常量单一事实来源**: Go 端操作码/操作数类型/SYS 功能号常量由 `ucpu/native/isa_gen.go`
+> 提供, 该文件由 `python script/gen_native_isa.py` 从 `ucpu/isa.py` **自动生成** (勿手工改动)。
+> 修改指令集后: `python script/gen_native_isa.py` → 重新编译原生库 → 跑 `python -m pytest`。
+> CI 中的 `script/gen_native_isa.py --check` 会拦截两者漂移。
+
 ---
 
 ## 5. 构建产物: .bin 字节码与 .crom 镜像
@@ -239,19 +251,23 @@ python cpu.py --crom basic.crom                 # 加载镜像运行
 
 ## 6. 打包独立可执行文件
 
-使用 PyInstaller (配置见 `ucpu.spec`):
+使用 PyInstaller, **唯一入口为 `ucpu.spec`** (Windows 下直接运行 `build_win.bat`):
 
 ```bash
-pip install pyinstaller
-pyinstaller cpu.py --name ucpu          # 等价 build_win.bat
-# 或使用 spec:
-pyinstaller ucpu.spec
+pip install -r requirements.txt pyinstaller   # 建议在干净 venv 中执行
+build_win.bat                                  # Windows
+# 或任意平台:
+pyinstaller --noconfirm --clean ucpu.spec
 ```
 
-产物在 `dist/ucpu/`。注意:
+spec 要点 (见文件内注释):
 
-- 分发包时应同时附带编译好的原生库 (`ucpu_native.dll` / `libucpu_native.so`), 或接受纯 Python 回退。
-- `--debug`/`--step` 的 rich 输出在无终端环境 (windowed) 下不可用, spec 中保持 `console=True`。
+- `binaries` 已携带 `ucpu/ucpu_native.dll` (ctypes 运行时加载, 静态分析发现不了);
+- `excludes` 列出 numpy/scipy/matplotlib/pywin32/cryptography 等无关重型库 — 在**只装
+  `requirements.txt` 的干净环境**构建可把产物从 ~100 MB 瘦身到几十 MB;
+- 冻结产物下的原生库搜索路径见 `ucpu/native.py: _lib_candidates` (exe 目录与 `_MEIPASS`)。
+
+产物在 `dist/ucpu/`。`--debug`/`--step` 的 rich 输出依赖终端, spec 中保持 `console=True`。
 
 ---
 
@@ -297,6 +313,27 @@ python cpu.py basic.cin --debug --log-file ucpu.log
 
 ## 8. 回归验证
 
+### 自动化测试 (pytest)
+
+```bash
+pip install -r requirements-dev.txt   # rich + pytest + ruff
+python -m pytest                      # 指令级黄金 / 三路径一致性 / 断点回归 / memory 保护 / CLI
+python script/gen_isa_docs.py --check     # docs/ISA.md 与 ucpu/isa.py 同步
+python script/gen_native_isa.py --check   # native/isa_gen.go 与 ucpu/isa.py 同步
+ruff check ucpu cpu.py script tests
+```
+
+测试内容概要 (`tests/`):
+
+- `test_isa_dispatch.py` — Opcode 总数/分组、dispatch 自动注册完整性 (每个 opcode 都有处理器)、文档生成一致性;
+- `test_cpu_interpreted.py` — 指令元组级黄金值、栈/内存往返、向量、异常路径;
+- `test_three_paths.py` — 解释 / JIT / Go 原生终态快照一致性;
+- `test_debugger.py` — 断点 continue 豁免重入 (建议 5)、`--step` 与断点共用命令集、graceful quit;
+- `test_memory_protection.py` — 保护检查统一 (浮点/块读写不可绕过);
+- `test_cli.py` / `test_cache.py` — 参数解析、退出码与缓存统计。
+
+### 手动三路径
+
 三路径输出一致性是核心约束 (合法差异: 时间戳、`rand` 序列、浮点末位舍入):
 
 ```bash
@@ -326,11 +363,24 @@ python cpu.py basic.cin --compile-only && python cpu.py basic.bin  # 字节码�
    - `Constants.OPCODE_NAMES` / `OPCODE_NAME_TO_ENUM` 加显示名;
    - `Constants.ARG_COUNTS` 声明参数个数 (`-1` 为变长);
    - 如是分支/浮点类, 加入 `BRANCH_OPS` / `FP_OPS` 集合 (统计用)。
-2. `ucpu/cpu.py` — `execute()` 的 dispatch 表加实现 (解释路径)。
+2. `ucpu/cpu.py` — 解释路径实现: 定义 `def _op_XXX(self, args)`。dispatch 表按 `_op_`
+   前缀**自动注册** (见 `_init_dispatch`), 无需手工登记; 无事件模型的别名指令
+   (如 WFE/WFI/SEV) 在 `CPU._OP_ALIASES` 声明。
 3. `ucpu/jit.py` — JIT 代码生成加分支 (否则该指令所在块会回退解释执行)。
-4. `ucpu/native/vm.go` — 原生 VM `switch` 加实现; 不实现时返回 `statusUnsupported`, Python 端自动回退。
+4. `ucpu/native/vm.go` — 原生 VM `switch` 加实现; 不实现时返回 `statusUnsupported`,
+   Python 端自动回退。Go 侧常量来自生成的 `isa_gen.go`, **不要手工改**。
 5. `ucpu/assembler.py` — 若有特殊操作数语法, 在汇编器适配; 常规 `reg/imm/label/mem` 自动支持。
 6. `ucpu/cin.py` — 如需暴露给 CIN, 在 `Syscall` 加功能号并在 `cpu.py`/`vm.go` 的 SYS handler 实现宿主调用。
+
+新增后同步 (防止文档/原生常量漂移):
+
+```bash
+python script/gen_isa_docs.py      # 重写 docs/ISA.md
+python script/gen_native_isa.py    # 重写 ucpu/native/isa_gen.go
+python script/gen_native_isa.py --check && python script/gen_isa_docs.py --check
+go build -buildmode=c-shared ...   # 重新编译原生库 (见第 4 节)
+python -m pytest
+```
 
 新增系统调用 (SYS): `isa.py: Syscall` 编号 -> `cpu.py` SYS 分支 -> `vm.go` SYS 分支 -> `cin.py:_gen_call` 内建映射。四处编号必须一致。
 

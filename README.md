@@ -371,7 +371,8 @@ flowchart TD
    ```
    git clone https://github.com/ByUsiStudio/ucpu.git
    cd ucpu
-   pip install rich
+   pip install -r requirements.txt        # 运行时依赖 (rich)
+   pip install -r requirements-dev.txt    # (可选) 开发: pytest + ruff
    ```
 
 2. (可选) 编译 Go 原生加速库, 见 [开发者编译文档](docs/BUILDING.md#4-构建-go-原生加速库):
@@ -388,6 +389,18 @@ flowchart TD
    ```
 
 > 未编译原生库也可运行, 自动回退纯 Python 解释执行。
+
+### 开发与测试
+
+```bash
+python -m pytest                            # 指令黄金 / 三路径一致性 / 断点回归 / 内存保护 / CLI
+python script/gen_isa_docs.py --check       # docs/ISA.md 与指令集同步
+python script/gen_native_isa.py --check     # Go 原生常量与指令集同步
+ruff check ucpu cpu.py script tests
+```
+
+仓库内置 GitHub Actions CI (`.github/workflows/ci.yml`): 多 Python 版本测试、ruff、Go 原生库编译校验;
+完整逐条指令表由 `script/gen_isa_docs.py` 从 `ucpu/isa.py` 生成至 [docs/ISA.md](docs/ISA.md)。
 
 ### 执行路径
 

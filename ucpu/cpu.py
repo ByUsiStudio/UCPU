@@ -44,6 +44,15 @@ def _format_float(v: float) -> str:
 
 
 class CPU:
+    # 建议 7: 指令处理器自动注册 (方法名 _op_XXX -> 指令 XXX)。
+    # 别名: 无事件模型的 ARM64 等待/事件指令, 语义上等价 NOP (预留扩展点)。
+    _OP_HANDLER_PREFIX = '_op_'
+    _OP_ALIASES = {
+        'WFE': '_op_nop',   # Wait For Event: 无中断模型, 视作 NOP
+        'WFI': '_op_nop',   # Wait For Interrupt: 无中断模型, 视作 NOP
+        'SEV': '_op_nop',   # Send Event: 无多核事件模型, 视作 NOP
+    }
+
     def __init__(self, config: Config, filename: Optional[str] = None,
                  crom_file: Optional[str] = None,
                  from_bin: bool = False,
@@ -103,6 +112,8 @@ class CPU:
         self.is_debugging = False
         self.breakpoints: set = set()
         self.debug_server = None
+        # 建议 5: 'continue' 后豁免一次当前 PC 的断点命中 (防止原地重入)
+        self._resume_bp_pc: Optional[int] = None
 
         self.input_buffer: str = ""
         self._input_pos = 0
@@ -171,119 +182,23 @@ class CPU:
                                         for name, pc in
                                         sorted(self.labels.items())})
     def _init_dispatch(self) -> None:
+        """自动注册指令处理器 (建议 7)。
+
+        约定: CPU 上任意名为 ``_op_XXX`` 的可调用方法即指令 ``XXX`` 的处理器,
+        不再手工维护 112 行映射表; 别名 (WFE/WFI/SEV -> NOP 语义) 见 _OP_ALIASES。
+        dispatch 键集合由 test_dispatch_complete 与 Opcode 枚举逐一校验。
+        """
         t: Dict[str, Any] = {}
-        t['MOV'] = self._op_mov
-        t['LOAD'] = self._op_load
-        t['STORE'] = self._op_store
-        t['ADD'] = self._op_add
-        t['SUB'] = self._op_sub
-        t['MUL'] = self._op_mul
-        t['DIV'] = self._op_div
-        t['AND'] = self._op_and
-        t['OR'] = self._op_or
-        t['XOR'] = self._op_xor
-        t['SHL'] = self._op_shl
-        t['SHR'] = self._op_shr
-        t['INC'] = self._op_inc
-        t['DEC'] = self._op_dec
-        t['CMP'] = self._op_cmp
-        t['JMP'] = self._op_jmp
-        t['JZ'] = self._op_jz
-        t['JNZ'] = self._op_jnz
-        t['JE'] = self._op_je
-        t['JL'] = self._op_jl
-        t['JG'] = self._op_jg
-        t['PUSH'] = self._op_push
-        t['POP'] = self._op_pop
-        t['CALL'] = self._op_call
-        t['RET'] = self._op_ret
-        t['IN'] = self._op_in
-        t['OUT'] = self._op_out
-        t['HALT'] = self._op_halt
-        t['ADDS'] = self._op_adds
-        t['SUBS'] = self._op_subs
-        t['ADDC'] = self._op_addc
-        t['SUBC'] = self._op_subc
-        t['LSL'] = self._op_lsl
-        t['LSR'] = self._op_lsr
-        t['ASR'] = self._op_asr
-        t['ROR'] = self._op_ror
-        t['MVN'] = self._op_mvn
-        t['EOR'] = self._op_eor
-        t['BIC'] = self._op_bic
-        t['ORN'] = self._op_orn
-        t['LDR'] = self._op_ldr
-        t['STR'] = self._op_str
-        t['LDP'] = self._op_ldp
-        t['STP'] = self._op_stp
-        t['CBZ'] = self._op_cbz
-        t['CBNZ'] = self._op_cbnz
-        t['TBZ'] = self._op_tbz
-        t['TBNZ'] = self._op_tbnz
-        t['B'] = self._op_b
-        t['BL'] = self._op_bl
-        t['BR'] = self._op_br
-        t['NOP'] = self._op_nop
-        t['WFE'] = self._op_nop
-        t['WFI'] = self._op_nop
-        t['SEV'] = self._op_nop
-        t['CSEL'] = self._op_csel
-        t['CSINC'] = self._op_csinc
-        t['CSINV'] = self._op_csinv
-        t['CSNEG'] = self._op_csneg
-        t['SXTB'] = self._op_sxtb
-        t['SXTH'] = self._op_sxth
-        t['SXTW'] = self._op_sxtw
-        t['UXTB'] = self._op_uxtb
-        t['UXTH'] = self._op_uxth
-        t['CLZ'] = self._op_clz
-        t['CLS'] = self._op_cls
-        t['RBIT'] = self._op_rbit
-        t['REV'] = self._op_rev
-        t['FADD'] = self._op_fadd
-        t['FSUB'] = self._op_fsub
-        t['FMUL'] = self._op_fmul
-        t['FDIV'] = self._op_fdiv
-        t['FCMP'] = self._op_fcmp
-        t['FCVT'] = self._op_fcvt
-        t['FABS'] = self._op_fabs
-        t['FNEG'] = self._op_fneg
-        t['LDRS'] = self._op_ldrs
-        t['STRS'] = self._op_strs
-        t['VADD'] = self._op_vadd
-        t['VSUB'] = self._op_vsub
-        t['VMUL'] = self._op_vmul
-        t['VDIV'] = self._op_vdiv
-        t['VLD1'] = self._op_vld1
-        t['VST1'] = self._op_vst1
-        t['LB'] = self._op_lb
-        t['LH'] = self._op_lh
-        t['LW'] = self._op_lw
-        t['LD'] = self._op_ld
-        t['SB'] = self._op_sb
-        t['SH'] = self._op_sh
-        t['SW'] = self._op_sw
-        t['SD'] = self._op_sd
-        t['ADDI'] = self._op_addi
-        t['SLTI'] = self._op_slti
-        t['SLTIU'] = self._op_sltiu
-        t['XORI'] = self._op_xori
-        t['ORI'] = self._op_ori
-        t['ANDI'] = self._op_andi
-        t['SLLI'] = self._op_slli
-        t['SRLI'] = self._op_srli
-        t['SRAI'] = self._op_srai
-        t['BEQ'] = self._op_beq
-        t['BNE'] = self._op_bne
-        t['BLT'] = self._op_blt
-        t['BGE'] = self._op_bge
-        t['BLTU'] = self._op_bltu
-        t['BGEU'] = self._op_bgeu
-        t['JALR'] = self._op_jalr
-        t['JAL'] = self._op_jal
-        t['LUI'] = self._op_lui
-        t['AUIPC'] = self._op_auipc
-        t['SYS'] = self._op_sys
+        prefix = self._OP_HANDLER_PREFIX
+        for name in dir(self):
+            if not name.startswith(prefix):
+                continue
+            opcode_name = name[len(prefix):].upper()
+            handler = getattr(self, name)
+            if opcode_name and callable(handler):
+                t.setdefault(opcode_name, handler)
+        for opcode_name, handler_name in self._OP_ALIASES.items():
+            t[opcode_name] = getattr(self, handler_name)
         self._dispatch = t
 
     # ==================== 操作数辅助 ====================
@@ -1515,16 +1430,35 @@ class CPU:
                                     f"{self.config.max_instructions}")
                 break
 
-            if self.debug_server and self.debug_server.check_conditional_breakpoints():
-                self.is_debugging = True
-                self.debug_command_loop()
-                continue
+            # 建议 5: 'continue' 后豁免一次当前 PC 的断点命中,
+            # 确保至少执行一条指令 (与 GDB 语义一致, 避免死循环重入)
+            resume_bp = self._resume_bp_pc is not None
+            if resume_bp:
+                self._resume_bp_pc = None
 
-            if self.pc in self.breakpoints:
-                self.console.print(
-                    f"{Colors.colorize(f'Breakpoint hit at PC={self.pc:#x}', Colors.YELLOW)}")
-                self.is_debugging = True
-                self.debug_command_loop()
+            if not resume_bp:
+                if self.debug_server and self.debug_server.check_conditional_breakpoints():
+                    self.is_debugging = True
+                    self.debug_command_loop()
+                    continue
+
+                if self.pc in self.breakpoints:
+                    self.console.print(
+                        f"{Colors.colorize(f'Breakpoint hit at PC={self.pc:#x}', Colors.YELLOW)}")
+                    self.is_debugging = True
+                    self.debug_command_loop()
+                    continue
+
+            # 建议 6: --step 与断点命中共用 DebugSession 命令集
+            if self.config.step_mode and self.config.interactive_mode:
+                from .debugger import DebugSession
+                action = DebugSession(self).run_step_mode()
+                if action in ('quit', 'halted'):
+                    if action == 'quit':
+                        self.running = False
+                    break
+                if action == 'run':
+                    self.config.step_mode = False
                 continue
 
             if self.jit is not None:
@@ -1543,12 +1477,6 @@ class CPU:
                 self.logger.info("HALT instruction executed")
                 break
 
-            if self.config.step_mode and self.config.interactive_mode:
-                self.display_state("Step Execution", opcode, args)
-                if input(f"{Colors.colorize('Continue? (y/n)', Colors.YELLOW)} "
-                         ).lower() != 'y':
-                    break
-
             if self.config.execution_interval > 0:
                 time.sleep(self.config.execution_interval)
 
@@ -1556,54 +1484,15 @@ class CPU:
 
     def display_state(self, title: str = "CPU State", opcode: Optional[str] = None,
                       args: Optional[List[Operand]] = None) -> None:
-        self.console.clear()
-        self.console.rule(f"{Colors.colorize(title, Colors.MAGENTA, True)}")
-
-        if opcode:
-            instr_text = f"{opcode} " + ", ".join(self._fmt_operand(a) for a in (args or []))
-            self.console.print(str(Panel(instr_text.strip(), title="Current Instruction")))
-
-        reg_info = {
-            'PSTATE': ' '.join(f"{k}={int(v)}" for k, v in self.pstate.items()),
-            'SP': self.sp,
-            'PC': self.pc,
-        }
-        if self.breakpoints:
-            reg_info['BREAKPOINTS'] = ', '.join(f"{b:#x}" for b in self.breakpoints)
-        self.regs.display_registers("General Registers (X0-X31)", reg_info, self.console)
-
-        if self.config.show_vector_regs:
-            self.vec_regs.display_vector_registers("Vector Registers (V0-V31)", self.console)
-
-        self.memory.display_memory("Memory (first 64 bytes)", 0, 64, self.console)
-
-        cache_stats = self.cache.get_stats()
-        self.console.print(
-            f"Cache: {cache_stats['hits']} hits, {cache_stats['misses']} misses "
-            f"({cache_stats['hit_rate'] * 100:.1f}% hit rate)")
-        self.console.rule()
+        # 建议 6: 渲染逻辑迁移至 ucpu/debugger.py (状态显示与执行解耦)
+        from .debugger import display_state as _render_state
+        _render_state(self, title, opcode, args)
 
     @staticmethod
     def _fmt_operand(op: Operand) -> str:
-        kind = op[0]
-        if kind == 'reg':
-            return f"X{op[1]}"
-        if kind == 'vec':
-            return f"V{op[1]}"
-        if kind == 'veclane':
-            return f"V{op[1]}.{op[2]}"
-        if kind == 'imm':
-            return f"#{op[1]}"
-        if kind == 'mem':
-            base, off = op[1], op[2]
-            if base >= 0:
-                return f"[X{base}, #{off}]" if off else f"[X{base}]"
-            return f"[#{off}]"
-        if kind == 'cond':
-            return op[1]
-        if kind == 'str':
-            return f"\"@{op[1]}\""
-        return str(op)
+        # 建议 6: 操作数格式化迁移至 ucpu/debugger.py
+        from .debugger import fmt_operand
+        return fmt_operand(op)
 
     def add_breakpoint(self, addr: int) -> None:
         self.breakpoints.add(addr)
@@ -1614,137 +1503,9 @@ class CPU:
         self.logger.info(f"Breakpoint removed at PC={addr:#x}")
 
     def debug_command_loop(self) -> None:
-        from .debugger import DebugServer
-        if self.debug_server is None:
-            self.debug_server = DebugServer(self)
+        """断点命中后的交互调试入口 (建议 6: 逻辑已迁移至 ucpu/debugger.DebugSession)。"""
+        from .debugger import DebugSession
+        action = DebugSession(self).run()
+        if action == 'halted':
+            self.running = False
 
-        self.is_debugging = True
-        self.console.print(
-            f"{Colors.colorize('Debug mode (type help for commands)', Colors.BLUE, True)}")
-
-        while self.is_debugging:
-            try:
-                cmd = input(f"{Colors.colorize('dbg>', Colors.YELLOW)} ").strip()
-            except EOFError:
-                break
-            if not cmd:
-                continue
-            parts = cmd.split()
-            command = parts[0].lower()
-
-            if command == 'help':
-                self._debug_help()
-            elif command in ('continue', 'c'):
-                self.is_debugging = False
-                return
-            elif command in ('step', 's'):
-                self.debug_server.record_state()
-                if not self.step():
-                    self.is_debugging = False
-                    return
-                self.display_state("Step Execution")
-            elif command == 'reverse':
-                if self.debug_server.reverse_step():
-                    self.console.print(f"{Colors.colorize('Reversed one step', Colors.GREEN)}")
-                    self.display_state("Reverse Step")
-                else:
-                    self.console.print(f"{Colors.colorize('No history available', Colors.RED)}")
-            elif command == 'forward':
-                if self.debug_server.forward_step():
-                    self.console.print(f"{Colors.colorize('Forward one step', Colors.GREEN)}")
-                    self.display_state("Forward Step")
-                else:
-                    self.console.print(f"{Colors.colorize('No forward history', Colors.RED)}")
-            elif command in ('print', 'p'):
-                self._debug_print(parts)
-            elif command == 'break':
-                self._debug_break(parts)
-            elif command == 'delete':
-                if len(parts) > 1:
-                    try:
-                        self.remove_breakpoint(int(parts[1]))
-                    except ValueError:
-                        self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
-            elif command == 'watch':
-                if len(parts) > 1:
-                    try:
-                        addr = int(parts[1], 0)
-                        access = parts[2] if len(parts) > 2 else 'rw'
-                        self.memory.set_protection(addr, access)
-                        self.console.print(
-                            f"{Colors.colorize(f'Watchpoint set at {addr:#x} for {access}', Colors.GREEN)}")
-                    except ValueError:
-                        self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
-            elif command in ('list', 'info'):
-                self.console.print(f"{Colors.colorize('Breakpoints:', Colors.BOLD)}")
-                for addr in sorted(self.breakpoints):
-                    self.console.print(f"  {addr:#x}")
-                for bp in self.debug_server.conditional_breakpoints:
-                    self.console.print(f"  {bp.address:#x} (cond: {bp.condition}, "
-                                       f"hits: {bp.hit_count})")
-            elif command in ('quit', 'q'):
-                sys.exit(0)
-            else:
-                self.console.print(f"{Colors.colorize('Unknown command', Colors.RED)}")
-
-    def _debug_print(self, parts):
-        if len(parts) < 2:
-            self.console.print(f"{Colors.colorize('Missing argument', Colors.RED)}")
-            return
-        target = parts[1]
-        if target.lower().startswith('x') and target[1:].isdigit():
-            idx = int(target[1:])
-            self.console.print(f"{target.upper()} = {self._reg(idx)} (0x{self._reg(idx):x})")
-        elif target == 'regs':
-            self.regs.display_registers(console=self.console)
-        elif target == 'mem':
-            if len(parts) > 2:
-                try:
-                    addr = int(parts[2], 0)
-                    value = self.memory.read_qword(addr)
-                    self.console.print(f"mem[{addr:#x}] = {value} (0x{value:x})")
-                except ValueError:
-                    self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
-            else:
-                self.memory.display_memory(console=self.console)
-        elif target == 'cache':
-            self.console.print(f"Cache stats: {self.cache.get_stats()}")
-        elif target == 'pc':
-            self.console.print(f"PC: {self.pc:#x}")
-        else:
-            self.console.print(f"{Colors.colorize('Unknown target', Colors.RED)}")
-
-    def _debug_break(self, parts):
-        if len(parts) < 2:
-            self.console.print(f"{Colors.colorize('Missing address', Colors.RED)}")
-            return
-        try:
-            addr = int(parts[1], 0)
-        except ValueError:
-            self.console.print(f"{Colors.colorize('Invalid address', Colors.RED)}")
-            return
-        if len(parts) > 2:
-            condition = ' '.join(parts[2:])
-            self.debug_server.add_conditional_breakpoint(addr, condition)
-            self.console.print(
-                f"{Colors.colorize(f'Conditional breakpoint set at {addr:#x}: {condition}', Colors.GREEN)}")
-        else:
-            self.add_breakpoint(addr)
-            self.console.print(f"{Colors.colorize(f'Breakpoint set at {addr:#x}', Colors.GREEN)}")
-
-    def _debug_help(self) -> None:
-        help_text = f"""
-{Colors.colorize('Debug Commands:', Colors.CYAN, True)}
-  {Colors.colorize('continue / c', Colors.GREEN)}  - Continue execution
-  {Colors.colorize('step / s', Colors.GREEN)}      - Single step
-  {Colors.colorize('reverse', Colors.GREEN)}       - Reverse one step
-  {Colors.colorize('forward', Colors.GREEN)}       - Forward one step
-  {Colors.colorize('break <addr> [cond]', Colors.GREEN)} - Set breakpoint
-  {Colors.colorize('delete <addr>', Colors.GREEN)} - Remove breakpoint
-  {Colors.colorize('watch <addr> [r|w|rw]', Colors.GREEN)} - Set watchpoint
-  {Colors.colorize('list / info', Colors.GREEN)}   - List breakpoints
-  {Colors.colorize('print / p <target>', Colors.GREEN)} - X0-X31, regs, mem [addr], cache, pc
-  {Colors.colorize('quit / q', Colors.GREEN)}      - Exit simulator
-  {Colors.colorize('help', Colors.GREEN)}          - Show this help
-        """
-        self.console.print(help_text)

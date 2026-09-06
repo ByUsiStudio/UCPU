@@ -68,6 +68,17 @@ class FastMemory:
             raise MemoryAccessError(
                 f"Memory protection violation at 0x{addr:x} for '{access}'")
 
+    def _check_protection_range(self, addr: int, size: int, access: str) -> None:
+        """对 [addr, addr+size) 内每个被保护字节做访问检查 (块读写统一入口)。"""
+        if not self._protection:
+            return
+        end = addr + size
+        for paddr, perms in self._protection.items():
+            if addr <= paddr < end and access not in perms:
+                raise MemoryAccessError(
+                    f"Memory protection violation at 0x{paddr:x} "
+                    f"for '{access}' (range 0x{addr:x}+{size})")
+
     def read_byte(self, addr: int) -> int:
         self._check_bounds(addr)
         self._check_protection(addr, 'r')
@@ -124,27 +135,33 @@ class FastMemory:
 
     def read_float(self, addr: int) -> float:
         self._check_bounds(addr, 4)
+        self._check_protection(addr, 'r')
         return struct.unpack_from('<f', self._view, addr)[0]
 
     def write_float(self, addr: int, value: float) -> None:
         self._check_bounds(addr, 4)
+        self._check_protection(addr, 'w')
         struct.pack_into('<f', self._view, addr, value)
 
     def read_double(self, addr: int) -> float:
         self._check_bounds(addr, 8)
+        self._check_protection(addr, 'r')
         return struct.unpack_from('<d', self._view, addr)[0]
 
     def write_double(self, addr: int, value: float) -> None:
         self._check_bounds(addr, 8)
+        self._check_protection(addr, 'w')
         struct.pack_into('<d', self._view, addr, value)
 
     def read_block(self, addr: int, size: int) -> bytes:
         self._check_bounds(addr, size)
+        self._check_protection_range(addr, size, 'r')
         return bytes(self._view[addr:addr + size])
 
     def write_block(self, addr: int, data) -> None:
         size = len(data)
         self._check_bounds(addr, size)
+        self._check_protection_range(addr, size, 'w')
         self._view[addr:addr + size] = data
 
     def read_string(self, addr: int, max_len: int = 4096) -> str:
