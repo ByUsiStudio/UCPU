@@ -150,6 +150,8 @@ for arg in "$@"; do
         args+=("$arg")
     elif [[ "$arg" = /* ]]; then
         args+=("$arg")
+    elif [[ "$arg" =~ ^[0-9]+$ ]]; then
+        args+=("$arg")
     else
         args+=("$original_pwd/$arg")
     fi
