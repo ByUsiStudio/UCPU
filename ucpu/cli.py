@@ -1,40 +1,21 @@
-"""命令行入口: 参数解析 -> 加载程序 -> 运行。"""
+"""命令行入口: argparse 参数解析 -> 加载程序 -> 运行。
 
+建议 3: 采用 argparse 统一参数表 (不再三份手写解析), 全部选项由
+build_parser() 单一来源定义, --help 与解析行为自动保持一致。
+"""
+
+import argparse
 import os
 import sys
 from typing import List, Optional
 
 from .config import Config
 from .console import Colors, Console, Panel
-from .cpu import CPU
-from .errors import CPUSimulatorError
 
-HELP_TEXT = f"""
-{Colors.colorize(f'UCPU Simulator v5.0', Colors.CYAN, True)}
+HELP_INTRO = f"""{Colors.colorize('UCPU Simulator v5.0', Colors.CYAN, True)}
 
 {Colors.colorize('Usage:', Colors.YELLOW)}
   python cpu.py <program.[cin|pl|asm|bin]> [options]
-
-{Colors.colorize('Options:', Colors.YELLOW)}
-  --no-native          禁用 Go 原生库, 强制纯 Python 解释执行
-  --jit                启用 Python JIT (基本块动态编译)
-  --step               单步执行 (交互式)
-  --debug              调试模式 (超详细 rich 追踪: 逐指令/寄存器/内存/栈/缓存)
-  --profile            执行后输出性能统计
-  --save               执行后保存 .crom 内存镜像
-  --no-compress        .crom 不压缩
-  --compile            编译为 .bin 字节码后继续执行
-  --compile-only       仅编译为 .bin 不执行
-  -o, --output <file>  指定输出文件 (.crom/.bin)
-  --crom <file>        加载指定 .crom 内存镜像
-  --mem-size <bytes>   内存大小 (默认 65536)
-  --max-instructions <n>  指令数上限
-  --cache-size <n>     缓存行数
-  --no-io              禁止 IN/OUT 与宿主 I/O
-  --strict             严格汇编模式
-  --log-level <level>  DEBUG / INFO / WARNING / ERROR
-  --log-file <file>    日志输出到文件
-  --help               显示本帮助
 
 {Colors.colorize('Supported formats:', Colors.YELLOW)}
   .cin   CIN 高级语言 (函数/struct/数组/浮点/字符串)
@@ -44,62 +25,154 @@ HELP_TEXT = f"""
 """
 
 
-def _extract_option(args: List[str], name: str) -> Optional[str]:
-    if name in args:
-        i = args.index(name)
-        if i + 1 < len(args):
-            return args[i + 1]
-    return None
+def build_parser() -> argparse.ArgumentParser:
+    """参数表单一来源 (与 Config 字段一一对应)。"""
+    p = argparse.ArgumentParser(
+        prog='cpu.py',
+        description='UCPU - 通用CPU模拟器 (CIN/PL/ASM 工具链 + 多执行路径)',
+        add_help=False,          # 帮助由 main 以彩色形式打印 (见 --help)
+    )
+    p.add_argument('program', nargs='?', default=None,
+                   metavar='program.[cin|pl|asm|bin]',
+                   help='程序源文件/字节码/镜像')
+    p.add_argument('--help', '-h', action='store_true', dest='show_help',
+                   help='显示帮助')
+
+    # 执行路径
+    p.add_argument('--no-native', action='store_true',
+                   help='禁用 Go 原生库, 强制纯 Python 解释执行')
+    p.add_argument('--jit', action='store_true', dest='enable_jit',
+                   help='启用 Python JIT (基本块动态编译)')
+    p.add_argument('--no-jit', action='store_true', dest='disable_jit',
+                   help=argparse.SUPPRESS)
+
+    # 日志与调试
+    p.add_argument('--debug', action='store_true',
+                   help='调试模式 (超详细 rich 追踪: 逐指令/寄存器/内存/栈/缓存)')
+    p.add_argument('--step', action='store_true',
+                   help='交互式单步执行 (step> 命令集, 与断点调试一致)')
+    p.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR',
+                                           'CRITICAL'],
+                   help='日志级别 (默认 INFO)')
+    p.add_argument('--log-file', metavar='FILE', help='日志输出到文件')
+    p.add_argument('--sandbox', action='store_true',
+                   help='沙箱模式 (限制宿主访问)')
+    p.add_argument('--no-io', action='store_true',
+                   help='禁止 IN/OUT 与宿主 I/O')
+
+    # 性能分析
+    p.add_argument('--profile', action='store_true',
+                   help='执行后输出性能统计')
+    p.add_argument('--cache-size', type=int, metavar='N',
+                   help='缓存行数 (默认 64)')
+    p.add_argument('--cache-assoc', type=int, metavar='N',
+                   help='缓存关联度 (默认 4)')
+    p.add_argument('--mem-size', type=int, metavar='BYTES',
+                   help='内存大小 (默认 65536)')
+    p.add_argument('--max-instructions', type=int, metavar='N',
+                   help='指令数上限 (默认 100000000)')
+    p.add_argument('--execution-interval', type=float, metavar='SEC',
+                   help='每指令间隔秒数 (演示减速用)')
+
+    # 编译 / CROM
+    p.add_argument('--compile', action='store_true', dest='compile_to_bin',
+                   help='编译为 .bin 字节码后继续执行')
+    p.add_argument('--compile-only', action='store_true',
+                   help='仅编译为 .bin 不执行')
+    p.add_argument('-o', '--output', metavar='FILE',
+                   help='指定输出文件 (.crom/.bin)')
+    p.add_argument('--crom', metavar='FILE', help='加载指定 .crom 内存镜像')
+    p.add_argument('--save', action='store_true', dest='auto_save_crom',
+                   help='执行后保存 .crom 内存镜像')
+    p.add_argument('--no-compress', action='store_false', dest='compress_crom',
+                   help='.crom 不压缩 (默认压缩)')
+
+    # 语言/汇编
+    p.add_argument('--optimize', type=int, metavar='0-3',
+                   help='优化级别 (0-3, 默认 0)')
+    p.add_argument('--strict', action='store_true', help='严格汇编模式')
+    return p
+
+
+def _apply_namespace(config: Config, ns: argparse.Namespace) -> None:
+    """把 argparse Namespace 映射到 Config 字段。"""
+    config.step_mode = ns.step
+    config.debug_mode = ns.debug
+    if ns.step or ns.debug:
+        config.interactive_mode = True
+    config.use_native = not ns.no_native
+    config.enable_jit = ns.enable_jit and not ns.disable_jit
+    config.sandbox_mode = ns.sandbox
+    config.profile = ns.profile
+    config.auto_save_crom = ns.auto_save_crom
+    config.compress_crom = ns.compress_crom
+    config.compile_to_bin = ns.compile_to_bin
+    config.compile_only = ns.compile_only
+    config.output_file = ns.output
+    config.allow_io = not ns.no_io
+    config.strict_mode = ns.strict
+
+    if ns.log_level is not None:
+        config.log_level = ns.log_level
+    if ns.log_file is not None:
+        config.log_file = ns.log_file
+    if ns.mem_size is not None:
+        config.mem_size = ns.mem_size
+    if ns.cache_size is not None:
+        config.cache_size = ns.cache_size
+    if ns.cache_assoc is not None:
+        config.cache_assoc = ns.cache_assoc
+    if ns.max_instructions is not None:
+        config.max_instructions = ns.max_instructions
+    if ns.execution_interval is not None:
+        config.execution_interval = ns.execution_interval
+    if ns.optimize is not None:
+        config.optimize = ns.optimize
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
-    if not args or '--help' in args or '-h' in args:
-        sys.stdout.write(HELP_TEXT + "\n")
+    if '--help' in args or '-h' in args:
+        sys.stdout.write(HELP_INTRO + "\n")
+        sys.stdout.write(build_parser().format_help())
         return 0
 
     console = Console()
+    parser = build_parser()
+    try:
+        ns = parser.parse_args(args)
+    except SystemExit as e:
+        # argparse 错误 (未知选项/非法数值): 已打印 usage, 返回其退出码
+        return int(e.code) if e.code is not None else 2
 
-    # 去掉选项及其值后, 第一个位置参数即程序文件
-    program_file: Optional[str] = None
-    skip_next = False
-    value_opts = {'--output', '-o', '--crom', '--mem-size', '--max-instructions',
-                  '--cache-size', '--log-level', '--log-file', '--optimize'}
-    for i, a in enumerate(args):
-        if skip_next:
-            skip_next = False
-            continue
-        if a in value_opts:
-            skip_next = True
-            continue
-        if not a.startswith('-'):
-            program_file = a
-            break
-
-    if not program_file:
+    if ns.program is None:
         console.print(Panel("No program file specified.\n"
                             "Use --help for usage information.",
                             title="Error", border_style='red'))
         return 1
 
-    config = Config.from_args(['cpu.py'] + args)
+    config = Config()
+    _apply_namespace(config, ns)
     config.validate()
 
-    crom_file = _extract_option(args, '--crom')
+    program_file = ns.program
+    crom_file = ns.crom
     output_file = (config.output_file
                    or os.path.splitext(program_file)[0] + '.bin')
 
     try:
+        from .cpu import CPU
         cpu = CPU(config, program_file, crom_file=crom_file)
-    except CPUSimulatorError as e:
-        console.print(Panel(str(e), title="Load Error", border_style='red'))
-        return 1
     except Exception as e:
-        console.print(Panel(str(e), title="Error", border_style='red'))
-        if config.debug_mode:
-            # 超详细: rich 彩色完整堆栈
-            console.print_exception()
+        from .errors import CPUSimulatorError
+        if isinstance(e, CPUSimulatorError):
+            console.print(Panel(str(e), title="Load Error", border_style='red'))
+        else:
+            console.print(Panel(str(e), title="Error", border_style='red'))
+            if config.debug_mode:
+                # 超详细: rich 彩色完整堆栈
+                console.print_exception()
         return 1
 
     try:
@@ -114,15 +187,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         cpu.run()
     except KeyboardInterrupt:
         pass
-    except CPUSimulatorError as e:
-        console.print(Panel(str(e), title="Error", border_style='red'))
-        if config.debug_mode:
-            console.print_exception()
-        return 1
     except Exception as e:
-        console.print(Panel(str(e), title="Unexpected Error",
-                            border_style='red'))
-        console.print_exception()
+        from .errors import CPUSimulatorError
+        if isinstance(e, CPUSimulatorError):
+            console.print(Panel(str(e), title="Error", border_style='red'))
+        else:
+            console.print(Panel(str(e), title="Unexpected Error",
+                                border_style='red'))
+            console.print_exception()
         return 1
     return 0
 
