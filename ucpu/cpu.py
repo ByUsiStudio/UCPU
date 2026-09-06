@@ -1381,6 +1381,8 @@ class CPU:
             self.heap_ptr = result['heap_ptr']
 
     def run(self) -> None:
+        if self.config.debug_server_port is not None:
+            return self._run_remote(self.config.debug_server_port)
         self.running = True
         self.stats.start()
         self.logger.info("Starting program execution")
@@ -1427,6 +1429,25 @@ class CPU:
                 crom_mod.save_crom(self.memory, crom_file,
                                    compress=self.config.compress_crom,
                                    logger=self.logger)
+
+    def _run_remote(self, port: int) -> None:
+        """A4: 远程驱动式调试 (单线程服务; 不启用原生/JIT/本地单步会话)。"""
+        from .debugger import DebugServer
+        self.running = False
+        self.stats.start()
+        self.logger.info(f"Remote debug server on port {port} "
+                         f"(waiting for client)")
+        srv = DebugServer(self, port)
+        self.debug_server = srv
+        try:
+            srv.drive()
+        except KeyboardInterrupt:
+            self.logger.info("User interrupt")
+        finally:
+            self.running = False
+            self.stats.stop()
+            self.cache.flush()
+            self.logger.info("Remote debug session ended")
 
     def _run_interpreted(self) -> None:
         while self.running:

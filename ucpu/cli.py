@@ -92,11 +92,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help='优化级别 (0-3, 默认 0)')
     p.add_argument('--strict', action='store_true', help='严格汇编模式')
 
-    # 运行时行为 (A1/A2)
+    # 运行时行为 (A1/A2/A4)
     p.add_argument('--seed', type=int, default=None, metavar='N',
                    help='随机种子 (确定性执行; 默认随机)')
     p.add_argument('--bounds-check', action='store_true',
                    help='CIN 数组越界运行时检查 (强制解释执行)')
+    p.add_argument('--debug-server', type=int, default=None, metavar='PORT',
+                   help='启动 TCP 远程调试服务 (连接后驱动式调试: step/continue/'
+                        'break/regs/mem/history)')
     p.add_argument('--disasm', action='store_true',
                    help='反汇编 .bin 字节码为文本清单后退出')
     return p
@@ -121,6 +124,7 @@ def _apply_namespace(config: Config, ns: argparse.Namespace) -> None:
     config.strict_mode = ns.strict
     config.seed = ns.seed
     config.bounds_check = ns.bounds_check
+    config.debug_server_port = ns.debug_server
 
     if ns.log_level is not None:
         config.log_level = ns.log_level

@@ -316,6 +316,133 @@ class DebugServer:
             return "OK: Quitting"
         return f"ERROR: Unknown command: {command}"
 
+    # ---------------- A4: 驱动式远程调试 ----------------
+
+    @staticmethod
+    def _readline(conn) -> str:
+        buf = []
+        while True:
+            ch = conn.recv(1)
+            if not ch:
+                return ''
+            if ch == b'\n':
+                return ''.join(buf)
+            if ch != b'\r':
+                buf.append(ch.decode('utf-8', 'replace'))
+        return ''.join(buf)
+
+    @staticmethod
+    def _send(conn, line: str) -> None:
+        conn.sendall((line + '\n').encode('utf-8'))
+
+    def _burst(self) -> str:
+        """continue: 执行到断点/停机/指令上限。返回 'halt' | 'limit' | 'paused'。"""
+        cpu = self.cpu
+        cpu.running = True
+        while cpu.running:
+            if cpu.pc < 0 or cpu.pc >= len(cpu.instructions):
+                return 'halt'
+            if cpu.stats.instruction_count >= cpu.config.max_instructions:
+                return 'limit'
+            # continue 后的首次断点豁免 (与本地会话一致)
+            resume_bp = cpu._resume_bp_pc is not None
+            if resume_bp:
+                cpu._resume_bp_pc = None
+            if not resume_bp:
+                if self.check_conditional_breakpoints():
+                    return 'paused'
+                if cpu.pc in cpu.breakpoints:
+                    cpu.console.print(
+                        f"{Colors.colorize(f'Breakpoint hit at PC={cpu.pc:#x}', Colors.YELLOW)}")
+                    return 'paused'
+            opcode, args = cpu.instructions[cpu.pc]
+            try:
+                if not cpu.execute(opcode, args):
+                    return 'halt'
+            except Exception as e:
+                cpu.running = False
+                cpu.logger.error(f"Execution error: {e}")
+                raise
+        return 'halt'
+
+    def drive(self) -> None:
+        """单客户端驱动式调试会话 (阻塞; 由 cpu.run 在 --debug-server 时调用)。"""
+        cpu = self.cpu
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind(('localhost', self.port))
+            self.socket.listen(1)
+            cpu.logger.info(f"Debug server listening on port {self.port}")
+            conn, addr = self.socket.accept()
+        except Exception as e:
+            cpu.logger.error(f"Debug server error: {e}")
+            return
+        self.connected = True
+        cpu.logger.info(f"Debug client connected from {addr}")
+        try:
+            self._send(conn, 'UCPU remote debug ready '
+                             '(step/continue/break/delete/watch/regs/mem/pc/'
+                             'history/info/quit)')
+            halted = False
+            while True:
+                line = self._readline(conn)
+                if line == '':
+                    break
+                cmd = line.strip()
+                if not cmd:
+                    continue
+                parts = cmd.split()
+                verb = parts[0].lower()
+                if verb in ('quit', 'q', 'exit'):
+                    self._send(conn, 'BYE')
+                    break
+                if halted and verb in ('step', 's', 'continue', 'c', 'run', 'r'):
+                    self._send(conn, 'ERROR: program halted')
+                    continue
+                if verb in ('step', 's'):
+                    self.record_state()
+                    if cpu.step():
+                        self._send(conn, f"OK pc=0x{cpu.pc:x}")
+                    else:
+                        self._send(conn, 'HALTED')
+                        halted = True
+                    continue
+                if verb in ('continue', 'c', 'run', 'r'):
+                    self._send(conn, 'OK continuing')
+                    try:
+                        res = self._burst()
+                    except Exception as e:
+                        self._send(conn, f'ERROR: {e}')
+                        halted = True
+                        continue
+                    if res == 'halt':
+                        self._send(conn, 'HALTED')
+                        halted = True
+                    elif res == 'limit':
+                        self._send(conn, 'LIMIT')
+                        halted = True
+                    else:
+                        self._send(conn, f"PAUSED pc=0x{cpu.pc:x}")
+                    continue
+                # 其余命令: 断点/查询等 (驱动空闲时执行)
+                try:
+                    resp = self._process_command(cmd.encode('utf-8'))
+                except Exception as e:
+                    resp = f'ERROR: {e}'
+                self._send(conn, resp or 'OK')
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self.connected = False
+            try:
+                self.socket.close()
+            except Exception:
+                pass
+            self.running = False
+
 
 # ==================== 交互式调试会话 ====================
 

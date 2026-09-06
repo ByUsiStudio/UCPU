@@ -37,6 +37,8 @@ class Config:
     seed: Optional[int] = None
     # A1: CIN 运行时断言/边界检查开关
     bounds_check: bool = False
+    # A4: 远程调试服务端口 (None = 不启动)
+    debug_server_port: Optional[int] = None
 
     # 命令行解析请使用 ucpu/cli.py build_parser() (argparse, 单一来源)。
     # Config 仅承载运行配置, 由 cli._apply_namespace 填充。
