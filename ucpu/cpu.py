@@ -124,7 +124,8 @@ class CPU:
 
         self._sys_buffers = [bytearray(64) for _ in range(8)]
         self._sys_buf_idx = 0
-        self._rand = random.Random()
+        self._rand = random.Random(
+            config.seed if config.seed is not None else None)
 
         self._init_dispatch()
 
@@ -141,7 +142,8 @@ class CPU:
         if ext == '.cin':
             from .cin import CINCompiler
             compiler = CINCompiler(self.console, logger=self.logger)
-            result = compiler.compile(filename)
+            result = compiler.compile(filename,
+                                      bounds_check=self.config.bounds_check)
             self.instructions = result.instructions
             self.labels = result.labels
             self.data_labels = result.data_labels
@@ -1258,6 +1260,11 @@ class CPU:
             addr = self._sys_buffer()
             self.memory.write_string(addr, "true" if x0 != 0 else "false")
             self._set_reg(0, addr)
+        elif call_id == Syscall.ABORT:
+            # 运行时中止 (assert / 边界检查): 消息指针位于 x0
+            msg = self.memory.read_string(x0, 512)
+            raise ExecutionError(f"Runtime abort: {msg}" if msg
+                                 else "Runtime abort")
         else:
             raise ExecutionError(f"Unknown SYS call id: {call_id}")
         return True
@@ -1379,7 +1386,9 @@ class CPU:
         self.logger.info("Starting program execution")
 
         native_outcome = None
-        if self.config.use_native and not self.config.debug_mode and not self.config.step_mode:
+        if (self.config.use_native and not self.config.debug_mode
+                and not self.config.step_mode
+                and not self.config.bounds_check):
             native_outcome = self._try_native_run()
 
         try:

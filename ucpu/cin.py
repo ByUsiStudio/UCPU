@@ -499,6 +499,8 @@ class Parser:
             body = self.parse_block_body()
             self.expect('RBRACE')
             return ('block', body)
+        if t.kind == 'IDENT' and t.value == 'assert':
+            return self.parse_assert()
         if t.kind == 'IDENT' and t.value == 'return':
             self.next()
             if self.peek().kind in ('NL', 'SEMI', 'RBRACE'):
@@ -599,6 +601,18 @@ class Parser:
         if not branches:
             raise CompilerError(f"Empty switch at line {line}")
         return ('switch', cond, branches)
+
+    def parse_assert(self):
+        line = self.peek().line
+        self.next()  # assert
+        self.expect('LPAREN')
+        cond = self.parse_expr()
+        msg = None
+        if self.accept('COMMA'):
+            msg = self.parse_expr()
+        self.expect('RPAREN')
+        self.accept('SEMI')
+        return ('assert', cond, msg, line)
 
     def parse_if(self):
         self.next()
@@ -822,12 +836,13 @@ class CINCompiler:
         self.console = console or Console()
         self.logger = logger
 
-    def compile(self, filename: str) -> CompileResult:
+    def compile(self, filename: str, bounds_check: bool = False) -> CompileResult:
         with open(filename, 'r', encoding='utf-8') as f:
             source = f.read()
-        return self.compile_source(source, filename)
+        return self.compile_source(source, filename, bounds_check=bounds_check)
 
-    def compile_source(self, source: str, filename: str = '<cin>') -> CompileResult:
+    def compile_source(self, source: str, filename: str = '<cin>',
+                       bounds_check: bool = False) -> CompileResult:
         dbg = self.logger.debug if (self.logger and self.logger.is_debug) \
             else (lambda msg: None)
         tokens = tokenize(source)
@@ -841,7 +856,8 @@ class CINCompiler:
         for name, fn in functions.items():
             dbg(f"CIN function {name}: {len(fn.params)} params")
 
-        gen = CodeGen(structs, functions)
+        gen = CodeGen(structs, functions, filename=filename,
+                      bounds_check=bounds_check)
         gen.layout_globals(globals_)
         for name, (typ, addr, block) in gen.globals.items():
             dbg(f"CIN global '{name}': type={typ} addr=0x{addr:x} block={block}")
@@ -856,10 +872,13 @@ class CINCompiler:
 
 class CodeGen:
     def __init__(self, structs: Dict[str, StructDef],
-                 functions: Dict[str, FuncDef]):
+                 functions: Dict[str, FuncDef], filename: str = '<cin>',
+                 bounds_check: bool = False):
         self.structs = structs
         self.functions = functions
         self.res = CompileResult()
+        self._filename = filename
+        self._bounds = bounds_check
 
         self.data_ptr = 0
         self.heap_strings: Dict[str, int] = {}
@@ -1149,6 +1168,8 @@ class CodeGen:
             self.gen_decl(s[1])
         elif kind == 'cpu':
             self.gen_cpu_stmt(s[1], s[2])
+        elif kind == 'assert':
+            self.gen_assert(s[1], s[2], s[3])
         elif kind == 'expr':
             self.gen_expr_stmt(s[1])
 
@@ -1373,6 +1394,33 @@ class CodeGen:
         # parse 不产生 '=' binop; 赋值在 parse 层未处理, 这里检测 call/var 链
         self.gen_value(node)
 
+    # ---------------- 运行时断言 / 中止 (A1) ----------------
+
+    def _runtime_abort(self, text: str) -> None:
+        """SYS ABORT: 加载静态消息指针并抛出运行时错误。"""
+        addr = self._data_string(text)
+        self.emit('MOV', self.reg(0), self.imm(addr))
+        self.emit('SYS', self.imm(Syscall.ABORT))
+
+    def gen_assert(self, cond, msg, line: int) -> None:
+        """assert(cond [, msg]) → 条件不成立时运行时中止。"""
+        l_ok = self.new_label('assertok')
+        self.gen_cond_jump_true(cond, l_ok)
+        if msg is None:
+            self._runtime_abort(
+                f"{self._filename}:{line}: assertion failed")
+        else:
+            # [prefix] + 消息 (消息支持任意表达式, 自动字符串化)
+            prefix = self._data_string(f"[assert {self._filename}:{line}] ")
+            self.emit('MOV', self.reg(0), self.imm(prefix))
+            self.emit('PUSH', self.reg(0))
+            self._gen_string_value(msg)
+            self.emit('MOV', self.reg(1), self.reg(0))
+            self.emit('POP', self.reg(0))
+            self.emit('SYS', self.imm(Syscall.STR_CONCAT))
+            self.emit('SYS', self.imm(Syscall.ABORT))
+        self.label(l_ok)
+
     # ---------------- 类型转换 ----------------
 
     def _convert(self, from_type, to_type) -> None:
@@ -1523,6 +1571,21 @@ class CodeGen:
         # x0 = base pointer; 计算 elem 地址
         self.emit('MOV', self.reg(3), self.reg(0))  # x3 = base
         self.gen_value(idx_node)                    # x0 = index
+
+        # A1 --bounds-check: 定长数组索引 0 <= i < size
+        if self._bounds and _is_fixed_array(base_t):
+            size = base_t[2]
+            l_ge = self.new_label('bndok')
+            self.emit('CMP', self.reg(0), self.imm(0))
+            self.emit('B', self.lab(l_ge), ('cond', 'GE'))
+            self._runtime_abort("bounds-check: negative array index")
+            self.label(l_ge)
+            l_lt = self.new_label('bndok')
+            self.emit('CMP', self.reg(0), self.imm(size))
+            self.emit('B', self.lab(l_lt), ('cond', 'LT'))
+            self._runtime_abort(f"bounds-check: index >= length ({size})")
+            self.label(l_lt)
+
         scale = _type_slots(elem_t) * 8
         self.emit('MOV', self.reg(1), self.imm(scale))
         self.emit('MUL', self.reg(0), self.reg(1))  # x0 = index * scale

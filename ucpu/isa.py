@@ -148,6 +148,7 @@ class Syscall(IntEnum):
     PRINT_STR = 24  # 打印 x0 指向的字符串 (OUT str 的系统调用形式)
     STR_CONCAT = 25  # strcat_alloc(x0=a, x1=b) -> 新堆块 ptr (NUL 结尾)
     BOOL_STR = 26   # bool_str(x0) -> "true"/"false" 静态缓冲 ptr
+    ABORT = 27      # abort(x0=消息指针): 抛 ExecutionError (assert/边界检查)
 
 
 class Cond:

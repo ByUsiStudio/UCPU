@@ -156,3 +156,4 @@ const sysFTOA = 23
 const sysPRINTSTR = 24
 const sysSTRCONCAT = 25
 const sysBOOLSTR = 26
+const sysABORT = 27

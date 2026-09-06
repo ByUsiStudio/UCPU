@@ -91,6 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--optimize', type=int, metavar='0-3',
                    help='优化级别 (0-3, 默认 0)')
     p.add_argument('--strict', action='store_true', help='严格汇编模式')
+
+    # 运行时行为 (A1/A2)
+    p.add_argument('--seed', type=int, default=None, metavar='N',
+                   help='随机种子 (确定性执行; 默认随机)')
+    p.add_argument('--bounds-check', action='store_true',
+                   help='CIN 数组越界运行时检查 (强制解释执行)')
+    p.add_argument('--disasm', action='store_true',
+                   help='反汇编 .bin 字节码为文本清单后退出')
     return p
 
 
@@ -111,6 +119,8 @@ def _apply_namespace(config: Config, ns: argparse.Namespace) -> None:
     config.output_file = ns.output
     config.allow_io = not ns.no_io
     config.strict_mode = ns.strict
+    config.seed = ns.seed
+    config.bounds_check = ns.bounds_check
 
     if ns.log_level is not None:
         config.log_level = ns.log_level
@@ -160,6 +170,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     crom_file = ns.crom
     output_file = (config.output_file
                    or os.path.splitext(program_file)[0] + '.bin')
+
+    if ns.disasm:
+        from .disasm import disassemble_file
+        try:
+            lines = disassemble_file(program_file)
+        except Exception as e:
+            from .errors import CPUSimulatorError
+            title = ("Disasm Error" if isinstance(e, CPUSimulatorError)
+                     else "Error")
+            console.print(Panel(str(e), title=title, border_style='red'))
+            return 1
+        sys.stdout.write("\n".join(lines))
+        return 0
 
     try:
         from .cpu import CPU
