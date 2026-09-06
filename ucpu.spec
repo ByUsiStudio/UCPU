@@ -1,16 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
-
-
 a = Analysis(
     ['cpu.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('ucpu/ucpu_native.dll', '.')],
     datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'numpy', 'scipy', 'matplotlib', 'pandas', 'sklearn', 'PIL',
+        'pywin32', 'win32com', 'win32api', 'pythoncom',
+        'cryptography', 'Crypto', 'nacl',
+        'yaml', 'requests', 'urllib3', 'boto3', 'bs4',
+        'setuptools', 'pkg_resources', 'IPython', 'jedi', 'debugpy',
+    ],
     noarchive=False,
     optimize=0,
 )
