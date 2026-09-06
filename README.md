@@ -688,6 +688,10 @@ xychart-beta
 ## 示例程序
 
 > CIN 语言完整语法见 [CIN 编程指南](docs/CIN_GUIDE.md)。
+>
+> **CIN 新语法示例**: `examples/control_flow.cin` (break/continue、do-while、switch/case、三目、复合赋值)、
+> `examples/literals_types.cin` (char/short/long/unsigned、0x/0b/0o 与字符字面量、`++/--`、转换内建函数);
+> 汇编器 `.equ`/表达式示例: `examples/asm_constants.asm`。
 
 ### 程序执行流程图
 

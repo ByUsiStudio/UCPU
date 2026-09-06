@@ -13,6 +13,52 @@ Instruction = Tuple[str, List[Operand]]
 _RE_XREG = re.compile(r'^[xXrRwW]([0-9]|[12][0-9]|3[01])$')
 _RE_VREG = re.compile(r'^[vV]([0-9]|[12][0-9]|3[01])(?:\.([0-3]))?$')
 _RE_LABEL = re.compile(r'^[a-zA-Z_.$][a-zA-Z0-9_.$]*$')
+_RE_EXPR_NAME = re.compile(r'\b[a-zA-Z_.$][a-zA-Z0-9_.$]*\b')
+_RE_EQU_DIRECTIVE = {'EQU', 'SET'}
+# 表达式只允许: 数字 / 已定义符号 / + - * / % ( ) 空白
+_RE_EXPR_OK = re.compile(r'^[0-9+\-*/%()\s]+$')
+# 表达式内的数值字面量 (十进制 / 0x / 0b / 0o, 允许下划线)
+_RE_EXPR_NUM = re.compile(
+    r'0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*')
+
+
+def _eval_expr(text: str, symbols: Dict[str, int]) -> Optional[int]:
+    """求值简单算术表达式 (数值/已定义符号/四则/取模/括号/一元符号)。
+
+    失败返回 None (调用方回退其它解析路径)。
+    """
+    text = text.strip().lstrip('#')
+    if not text:
+        return None
+
+    # 先把数值字面量替换为整数字符串, 避免 0xFF 中的字母与符号名混淆
+    def repl_num(match):
+        raw = match.group(0).replace('_', '')
+        if len(raw) > 1 and raw[:2].lower() in ('0x', '0b', '0o'):
+            raw = '0' + raw[1].lower() + raw[2:]
+        try:
+            return str(int(raw, 0))
+        except ValueError:
+            return '0'
+
+    text = _RE_EXPR_NUM.sub(repl_num, text)
+
+    def repl_name(match):
+        name = match.group(0)
+        if name not in symbols:
+            raise KeyError(name)
+        return str(symbols[name])
+
+    try:
+        expr = _RE_EXPR_NAME.sub(repl_name, text)
+    except KeyError:
+        return None
+    if not _RE_EXPR_OK.match(expr):
+        return None
+    try:
+        return int(eval(expr, {'__builtins__': {}}, {}))  # noqa: S307 - 本地汇编器输入
+    except Exception:
+        return None
 
 
 class Assembler:
@@ -25,6 +71,7 @@ class Assembler:
         self.instructions: List[Instruction] = []
         self.labels: Dict[str, int] = {}
         self.data_labels: Dict[str, int] = {}
+        self.equ: Dict[str, int] = {}   # .equ/.set 常量
 
     def _dbg(self, msg: str) -> None:
         if self.logger is not None:
@@ -113,11 +160,31 @@ class Assembler:
                     out.append((cleaned.strip(), line_num, filename))
         return out
 
+    def _parse_equ(self, line: str, line_num: int, fname: str) -> None:
+        """.equ/.set NAME <expr>  (名称/值/四则/括号/已定义符号)。"""
+        head = line.split(None, 1)
+        rest = (head[1] if len(head) > 1 else '').lstrip(',').strip()
+        m = re.match(r'^([A-Za-z_.$][A-Za-z0-9_.$]*)\s*(?:=\s*)?(.*)$', rest)
+        if not m or not m.group(2).strip():
+            raise AssemblerError(
+                line, ".equ format: .equ NAME <expr> (例: .equ N, 8*4)",
+                line_num, fname)
+        name, expr = m.group(1), m.group(2).strip().lstrip(',').strip()
+        sym = dict(self.equ)
+        sym.update(self.labels)
+        sym.update(self.data_labels)
+        val = _eval_expr(expr, sym)
+        if val is None:
+            raise AssemblerError(line, f"Bad .equ expression: {expr!r}",
+                                 line_num, fname)
+        self.equ[name] = val
+
     def _assemble_lines(self, lines: List[Tuple[str, int, str]], filename: str
                         ) -> Tuple[List[Instruction], Dict[str, int], Dict[str, int]]:
         self.instructions = []
         self.labels = {}
         self.data_labels = {}
+        self.equ = {}
         instr_index = 0
         data_addr = 0
         section = 'TEXT'
@@ -134,6 +201,13 @@ class Assembler:
                 continue
             if upper in ('.DATA', 'DATA'):
                 section = 'DATA'
+                i += 1
+                continue
+
+            # .equ/.set 常量定义 (需带点前缀, 避免与 PL 关键字 'set' 冲突)
+            head_tok = line.split(None, 1)
+            if head_tok and head_tok[0].lower() in ('.equ', '.set'):
+                self._parse_equ(line, line_num, fname)
                 i += 1
                 continue
 
@@ -154,7 +228,11 @@ class Assembler:
                     raise AssemblerError(line, f"Invalid label: {label}", line_num, fname)
 
             if section == 'DATA':
-                data_addr = self._handle_data(rest_line, data_addr, line_num, fname)
+                sym = dict(self.equ)
+                sym.update(self.labels)
+                sym.update(self.data_labels)
+                data_addr = self._handle_data(rest_line, data_addr, line_num,
+                                              fname, sym)
                 i += 1
                 continue
 
@@ -162,14 +240,18 @@ class Assembler:
             instr_index += 1
             i += 1
 
-        all_labels = self.labels | self.data_labels
+        # 指令二次解析: 符号表 = 标签 + 数据标签 + .equ (标签优先)
+        sym_final = dict(self.equ)
+        sym_final.update(self.labels)
+        sym_final.update(self.data_labels)
         for line, idx, line_num, fname in text_lines:
-            instr = self._parse_instruction(line, all_labels, line_num, fname)
+            instr = self._parse_instruction(line, sym_final, line_num, fname)
             self.instructions.append(instr)
 
         return self.instructions, self.labels, self.data_labels
 
-    def _handle_data(self, line: str, data_addr: int, line_num: int, fname: str) -> int:
+    def _handle_data(self, line: str, data_addr: int, line_num: int, fname: str,
+                     symbols: Optional[Dict[str, int]] = None) -> int:
         # 先按空白拆出指令名 (如 ASCIZ "..."), 其余按逗号拆分
         head_tokens = line.split(None, 1)
         if not head_tokens:
@@ -210,7 +292,8 @@ class Assembler:
                 piece = piece.strip()
                 if not piece:
                     continue
-                values = self._parse_data_values(piece, line, line_num, fname)
+                values = self._parse_data_values(piece, line, line_num, fname,
+                                                 symbols)
                 for val in values:
                     if width == 1:
                         self.memory.write_byte(data_addr, val & 0xFF)
@@ -224,10 +307,15 @@ class Assembler:
         return data_addr
 
     def _parse_data_values(self, token: str, line: str, line_num: int,
-                           fname: str) -> List[int]:
+                           fname: str,
+                           symbols: Optional[Dict[str, int]] = None) -> List[int]:
         token = token.strip().rstrip(',')
         if token.startswith("'") and token.endswith("'") and len(token) >= 3:
-            return [ord(token[1])]
+            body = token[1:-1]
+            if body.startswith('\\'):
+                return [{'n': 10, 't': 9, 'r': 13, '0': 0, '\\': 92,
+                         "'": 39, '"': 34}.get(body[1], ord(body[1]))]
+            return [ord(body[0])]
         if token.startswith('"') and token.endswith('"'):
             vals = [b for b in token[1:-1].encode('utf-8')]
             vals.append(0)
@@ -235,7 +323,11 @@ class Assembler:
         try:
             return [self.parse_immediate(token)]
         except ValueError:
-            raise AssemblerError(line, f"Invalid data value: {token}", line_num, fname)
+            val = _eval_expr(token, symbols or {})
+            if val is not None:
+                return [val]
+            raise AssemblerError(line, f"Invalid data value: {token}",
+                                 line_num, fname)
 
     @staticmethod
     def _unquote(token: str) -> str:
@@ -246,7 +338,12 @@ class Assembler:
 
     @staticmethod
     def parse_immediate(val: str) -> int:
-        val = val.strip().lstrip('#')
+        val = val.strip().lstrip('#').replace('_', '')
+        if not val:
+            raise ValueError("empty immediate")
+        # 数值后缀 (u/U/l/L 及 f/F) 在 64 位槽模型下无宽度差异, 直接忽略
+        while val and val[-1] in 'uUlLfF':
+            val = val[:-1]
         if not val:
             raise ValueError("empty immediate")
         neg = False
@@ -288,7 +385,7 @@ class Assembler:
             parts.append(tail)
         return parts
 
-    def _parse_instruction(self, line: str, all_labels: Dict[str, int],
+    def _parse_instruction(self, line: str, symbols: Dict[str, int],
                            line_num: int, fname: str) -> Instruction:
         tokens = line.split(None, 1)
         mnemonic_raw = tokens[0]
@@ -317,7 +414,7 @@ class Assembler:
             operands.append(('cond', cond_prefix))
 
         for tok in self._split_operands(rest):
-            operands.append(self._parse_operand(tok, all_labels, line, line_num, fname))
+            operands.append(self._parse_operand(tok, symbols, line, line_num, fname))
 
         if self.strict:
             expected = Constants.ARG_COUNTS.get(Constants.OPCODE_NAME_TO_ENUM[opcode], -1)
@@ -329,7 +426,7 @@ class Assembler:
 
         return (opcode, operands)
 
-    def _parse_operand(self, tok: str, all_labels: Dict[str, int], line: str,
+    def _parse_operand(self, tok: str, symbols: Dict[str, int], line: str,
                        line_num: int, fname: str) -> Operand:
         tok = tok.strip()
         if not tok:
@@ -339,7 +436,7 @@ class Assembler:
             if not tok.endswith(']'):
                 raise AssemblerError(line, f"Malformed memory operand: {tok}",
                                      line_num, fname)
-            return self._parse_mem(tok[1:-1], all_labels, line, line_num, fname)
+            return self._parse_mem(tok[1:-1], symbols, line, line_num, fname)
 
         m = _RE_VREG.match(tok)
         if m:
@@ -367,17 +464,23 @@ class Assembler:
 
         if tok.startswith('='):
             name = tok[1:].strip()
-            if name in all_labels:
-                return ('imm', all_labels[name])
+            if name in symbols:
+                return ('imm', symbols[name])
+            val = _eval_expr(name, symbols)
+            if val is not None:
+                return ('imm', val)
             raise AssemblerError(line, f"Undefined symbol: {name}", line_num, fname)
 
         if tok.startswith('#'):
+            inner = tok[1:].strip()
             try:
                 return ('imm', self.parse_immediate(tok))
             except ValueError:
-                inner = tok[1:].strip()
-                if inner in all_labels:
-                    return ('imm', all_labels[inner])
+                if inner in symbols:
+                    return ('imm', symbols[inner])
+                val = _eval_expr(inner, symbols)
+                if val is not None:
+                    return ('imm', val)
                 raise AssemblerError(line, f"Bad immediate: {tok}", line_num, fname)
 
         try:
@@ -385,14 +488,19 @@ class Assembler:
         except ValueError:
             pass
 
+        # 表达式立即数 / 符号算术: 8+4*2 / SIZE-1 / loop+4 / 等
+        val = _eval_expr(tok, symbols)
+        if val is not None:
+            return ('imm', val)
+
         if _RE_LABEL.match(tok):
-            if tok in all_labels:
-                return ('imm', all_labels[tok])
+            if tok in symbols:
+                return ('imm', symbols[tok])
             raise AssemblerError(line, f"Undefined label: {tok}", line_num, fname)
 
         raise AssemblerError(line, f"Cannot parse operand: {tok}", line_num, fname)
 
-    def _parse_mem(self, inner: str, all_labels: Dict[str, int], line: str,
+    def _parse_mem(self, inner: str, symbols: Dict[str, int], line: str,
                    line_num: int, fname: str) -> Operand:
         parts = [p.strip() for p in self._split_operands(inner) if p.strip()]
         if not parts:
@@ -408,18 +516,21 @@ class Assembler:
             try:
                 offset = self.parse_immediate(first)
             except ValueError:
-                if first.lstrip('#') in all_labels:
-                    offset = all_labels[first.lstrip('#')]
-                else:
+                val = _eval_expr(first.lstrip('#'), symbols)
+                if val is None:
                     raise AssemblerError(line, f"Bad memory base: {first}",
                                          line_num, fname)
+                offset = val
 
         if len(parts) > 1:
             second = parts[1]
             try:
                 offset += self.parse_immediate(second)
             except ValueError:
-                raise AssemblerError(line, f"Bad memory offset: {second}",
-                                     line_num, fname)
+                val = _eval_expr(second.lstrip('#'), symbols)
+                if val is None:
+                    raise AssemblerError(line, f"Bad memory offset: {second}",
+                                         line_num, fname)
+                offset += val
 
         return ('mem', base, offset)

@@ -34,6 +34,22 @@ def run_program(program, **cfg) -> CPU:
     return cpu
 
 
+def run_cin_source(source: str, **cfg) -> CPU:
+    """编译并运行 CIN 源码 (内存内, 无需文件; 支持三执行路径)。"""
+    from ucpu.cin import CINCompiler
+    cpu = new_cpu(**cfg)
+    res = CINCompiler().compile_source(source)
+    cpu.instructions = res.instructions
+    cpu.labels = res.labels
+    cpu.data_labels = res.data_labels
+    for addr, data in res.data_writes:
+        cpu.memory.write_block(addr, data)
+    cpu.entry_pc = 0
+    cpu.pc = 0
+    cpu.run()
+    return cpu
+
+
 def asm_program(source: str, workdir: str, name: str = 'prog.asm', **cfg) -> CPU:
     """从汇编源码加载 CPU。"""
     path = os.path.join(workdir, name)

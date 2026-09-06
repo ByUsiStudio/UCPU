@@ -1,0 +1,28 @@
+// 类型别名 / 字面量 / 自增自减 / 转换内建函数
+// 运行: python cpu.py examples/literals_types.cin
+// 说明: UCPU 值均为 64 位槽; char/short/long/unsigned 为语法别名 (与 int 同宽)。
+
+function main() -> int {
+    unsigned int big = 4000000000
+    int hex = 0x1F
+    int bin = 0b1101
+    int oct = 0o17
+    char letter = 'A'
+    char newline = '\n'
+
+    int x = 5
+    int pre = ++x          // pre=6
+    int post = x--         // post=6, x=5
+    x += 10                // 15
+    x *= 2                 // 30
+    x -= 5                 // 25
+    x %= 7                 // 4
+    int q = x / 2
+
+    println("hex=" + int_to_str(hex) + " bin=" + int_to_str(bin)
+            + " oct=" + int_to_str(oct) + " letter=" + int_to_str(letter))
+    println("pre=" + int_to_str(pre) + " post=" + int_to_str(post)
+            + " x=" + int_to_str(x) + " q=" + int_to_str(q))
+    println("pi=" + float_to_str(3.14159) + " ok=" + bool_to_str(true))
+    return hex + bin + oct + pre + post + x + q
+}

@@ -1,0 +1,28 @@
+// 控制流新语法: break / continue / do-while / switch / 三目 / 复合赋值
+// 运行: python cpu.py examples/control_flow.cin
+
+function main() -> int {
+    int sum = 0
+    for (int i = 1; i <= 10; i++) {
+        if (i % 2 == 1) continue      // 只累加偶数
+        if (i > 8) break              // 提前终止
+        sum += i
+    }
+    int d = 0
+    do {
+        d++
+    } while (d < 4)
+
+    int grade = 75
+    int tier = grade / 25       // 整型除法: 转为 int 截断
+    switch (tier) {
+        case 0: println("level: low");    break
+        case 1: println("level: medium"); break
+        case 2: println("level: high");   break
+        default: println("level: top")
+    }
+
+    string ok = (grade >= 60) ? "pass" : "fail"
+    println("sum=" + int_to_str(sum) + " d=" + int_to_str(d) + " " + ok)
+    return sum + d
+}

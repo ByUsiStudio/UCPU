@@ -3,6 +3,13 @@
 将 CIN 源码 (类 C 语法: 函数/struct/多维数组/字符串/浮点/控制流)
 编译为 UCPU 字节码 IR。
 
+语法扩展 (2026):
+  - 语句: break/continue, do-while, switch/case/default (case 常量表达式)
+  - 表达式: ?: 三目 (短路), ++/-- 前缀与后缀, 复合赋值 += -= *= /= %=
+  - 字面量/类型: 0x/0b/0o 进制与 u/L/f 后缀、数字下划线、字符字面量 'a';
+    char/short/long/unsigned 类型别名 (64 位槽模型, 与 int 同宽)
+  - 内建: int_to_str/itoa, float_to_str/ftoa, bool_to_str
+
 运行时约定:
   - 所有值均为 64 位槽: int 为有符号整数; float 为 float64 位模式;
     bool 为 0/1; string/struct/数组为内存指针。
@@ -64,10 +71,21 @@ def _type_slots(t) -> int:
 # ==================== 词法分析 ====================
 
 _KEYWORDS = {
-    'struct', 'function', 'return', 'if', 'else', 'while', 'for',
-    'break', 'continue', 'true', 'false', 'int', 'float', 'bool',
-    'string', 'void',
+    'struct', 'function', 'return', 'if', 'else', 'while', 'for', 'do',
+    'switch', 'case', 'default', 'break', 'continue', 'true', 'false',
+    'int', 'float', 'bool', 'string', 'void', 'char', 'short', 'long',
+    'unsigned',
     'set', 'add', 'subtract', 'multiply', 'divide', 'increment', 'decrement',
+}
+
+# 声明起始的标量类型词 (含新支持的类型别名, 均映射到 64 位槽 int 模型)
+BASE_TYPE_WORDS = ('int', 'float', 'bool', 'string', 'char', 'short', 'long',
+                   'unsigned')
+
+# 复合赋值: 词法 token -> C 风格运算符
+_COMPOUND_ASSIGN = {
+    'PLUSEQ': '+=', 'MINUSEQ': '-=', 'STAREQ': '*=',
+    'SLASHEQ': '/=', 'PERCENTEQ': '%=',
 }
 
 _SINGLE_OPS = {
@@ -75,6 +93,7 @@ _SINGLE_OPS = {
     '[': 'LBRACKET', ']': 'RBRACKET', ',': 'COMMA', ';': 'SEMI',
     '+': 'PLUS', '-': 'MINUS', '*': 'STAR', '/': 'SLASH', '%': 'PERCENT',
     '=': 'ASSIGN', '<': 'LT', '>': 'GT', '!': 'BANG', '.': 'DOT',
+    '?': 'QUESTION', ':': 'COLON',
 }
 
 
@@ -131,22 +150,50 @@ def tokenize(source: str) -> List[Token]:
         elif c.isdigit() or (c == '.' and i + 1 < n and source[i + 1].isdigit()):
             start = i
             is_float = False
-            while i < n and (source[i].isdigit() or source[i] == '.'):
-                if source[i] == '.':
+            if c == '0' and i + 1 < n and source[i + 1] in 'xXbBoO':
+                # 进制前缀: 0x/0X 16, 0b/0B 2, 0o/0O 8
+                base = {'x': 16, 'X': 16, 'b': 2, 'B': 2,
+                        'o': 8, 'O': 8}[source[i + 1]]
+                i += 2
+                dstart = i
+                allowed = ('0123456789abcdefABCDEF_' if base == 16 else
+                           ('01_' if base == 2 else '01234567_'))
+                while i < n and source[i] in allowed:
+                    i += 1
+                if i == dstart or not any(ch != '_' for ch in
+                                          source[dstart:i]):
+                    raise CompilerError(f"Malformed numeric literal at line {line}")
+                # 后缀 (u/U/l/L, f/F): 64 位槽模型忽略宽度差异
+                while i < n and source[i] in 'uUlL':
+                    i += 1
+                if i < n and source[i] in 'fF':
                     is_float = True
-                i += 1
-            if i < n and source[i] in 'eE':
-                is_float = True
-                i += 1
-                if i < n and source[i] in '+-':
                     i += 1
-                while i < n and source[i].isdigit():
-                    i += 1
-            text = source[start:i]
-            if is_float:
-                tokens.append(Token('FLOAT', float(text), line))
+                text = source[start:i]
+                norm = '0' + text[1].lower() + text[2:]
+                value = int(norm.replace('_', ''), 0)
             else:
-                tokens.append(Token('NUMBER', int(text), line))
+                while i < n and (source[i].isdigit() or source[i] == '.'
+                                 or source[i] == '_'):
+                    if source[i] == '.':
+                        is_float = True
+                    i += 1
+                if i < n and source[i] in 'eE':
+                    is_float = True
+                    i += 1
+                    if i < n and source[i] in '+-':
+                        i += 1
+                    while i < n and (source[i].isdigit() or source[i] == '_'):
+                        i += 1
+                while i < n and source[i] in 'uUlL':
+                    i += 1
+                if i < n and source[i] in 'fF':
+                    is_float = True
+                    i += 1
+                text = source[start:i].replace('_', '')
+                value = float(text) if is_float else int(text)
+            tokens.append(Token('FLOAT', float(value), line) if is_float
+                          else Token('NUMBER', int(value), line))
         elif c.isalpha() or c == '_':
             start = i
             while i < n and (source[i].isalnum() or source[i] == '_'):
@@ -155,6 +202,35 @@ def tokenize(source: str) -> List[Token]:
             tokens.append(Token('IDENT', word, line))
         elif c == '-' and i + 1 < n and source[i + 1] == '>':
             tokens.append(Token('ARROW', '->', line))
+            i += 2
+        elif c == "'":                       # 字符字面量: 'a' '\n' '\'' ...
+            start_line = line
+            i += 1
+            if i >= n:
+                raise CompilerError(f"Unterminated char literal at line {start_line}")
+            if source[i] == '\\' and i + 1 < n:
+                esc = source[i + 1]
+                val = {'n': 10, 't': 9, 'r': 13, '0': 0, 'a': 7, 'b': 8,
+                       'f': 12, 'v': 11, "'": 39, '"': 34,
+                       '\\': 92}.get(esc, ord(esc))
+                i += 2
+            else:
+                val = ord(source[i])
+                i += 1
+            if i >= n or source[i] != "'":
+                raise CompilerError(f"Unterminated char literal at line {start_line}")
+            i += 1
+            tokens.append(Token('NUMBER', val, line))
+        elif c in ('+', '-', '*', '/', '%') and i + 1 < n and source[i + 1] == '=':
+            kind = {'+': 'PLUSEQ', '-': 'MINUSEQ', '*': 'STAREQ',
+                    '/': 'SLASHEQ', '%': 'PERCENTEQ'}[c]
+            tokens.append(Token(kind, c + '=', line))
+            i += 2
+        elif c == '+' and i + 1 < n and source[i + 1] == '+':
+            tokens.append(Token('INC', '++', line))
+            i += 2
+        elif c == '-' and i + 1 < n and source[i + 1] == '-':
+            tokens.append(Token('DEC', '--', line))
             i += 2
         elif c == '=' and i + 1 < n and source[i + 1] == '=':
             tokens.append(Token('EQ', '==', line)); i += 2
@@ -181,7 +257,8 @@ def tokenize(source: str) -> List[Token]:
     close_kw = {'RPAREN', 'RBRACKET'}
     continue_ops = {'PLUS', 'MINUS', 'STAR', 'SLASH', 'PERCENT', 'ASSIGN',
                     'LT', 'GT', 'LE', 'GE', 'EQ', 'NEQ', 'AND', 'OR', 'COMMA',
-                    'ARROW', 'DOT'}
+                    'ARROW', 'DOT', 'PLUSEQ', 'MINUSEQ', 'STAREQ', 'SLASHEQ',
+                    'PERCENTEQ', 'INC', 'DEC'}
     for idx, tok in enumerate(tokens):
         if tok.kind in open_kw:
             depth += 1
@@ -262,8 +339,16 @@ class Parser:
     def parse_type(self) -> Any:
         t = self.expect('IDENT')
         base = t.value
-        if base in ('int', 'float', 'bool', 'string', 'void'):
-            vtype: Any = base
+        if base == 'unsigned':
+            # unsigned [char|short|int|long]; 缺省为 int
+            nxt = self.peek()
+            if nxt.kind == 'IDENT' and nxt.value in ('char', 'short', 'int', 'long'):
+                self.next()
+            vtype = 'int'
+        elif base in ('int', 'float', 'bool', 'string', 'void', 'char', 'short',
+                      'long'):
+            # char/short/long 为整数别名 (64 位槽模型, 与 int 同宽)
+            vtype = 'int' if base in ('char', 'short', 'long') else base
         else:
             vtype = ('struct', base)
         # int[] / int[][] 形式 (后缀在类型名上)
@@ -271,6 +356,17 @@ class Parser:
             self.next(); self.next()
             vtype = ('ptrarray', vtype)
         return vtype
+
+    def _is_decl_start(self) -> bool:
+        """当前是否处于类型声明起始 (基础类型 / unsigned / struct 类型名)。"""
+        t = self.peek()
+        if t.kind != 'IDENT':
+            return False
+        v = t.value
+        if v in BASE_TYPE_WORDS:
+            return True
+        # struct 类型名 (裸标识符) 后跟另一个标识符 = 声明
+        return v not in _KEYWORDS and self.peek(1).kind == 'IDENT'
 
     def parse_dims(self) -> List[int]:
         dims = []
@@ -420,19 +516,17 @@ class Parser:
             return ('while', cond, body)
         if t.kind == 'IDENT' and t.value == 'for':
             return self.parse_for()
+        if t.kind == 'IDENT' and t.value == 'do':
+            return self.parse_do()
+        if t.kind == 'IDENT' and t.value == 'switch':
+            return self.parse_switch()
         if t.kind == 'IDENT' and t.value == 'break':
             self.next(); self.accept('SEMI')
             return ('break',)
         if t.kind == 'IDENT' and t.value == 'continue':
             self.next(); self.accept('SEMI')
             return ('continue',)
-        if t.kind == 'IDENT' and t.value in ('int', 'float', 'bool', 'string') \
-                or (t.kind == 'IDENT' and t.value not in _KEYWORDS
-                    and self.peek(1).kind == 'IDENT'):
-            # 类型声明 (基础类型或 struct 名)
-            if t.value not in ('int', 'float', 'bool', 'string'):
-                # 可能是 struct 类型名: 看下一个是否为 IDENT 且当前不是表达式开头
-                pass
+        if self._is_decl_start():
             return self.parse_decl()
         if t.kind == 'IDENT' and t.value in ('set', 'add', 'subtract', 'multiply',
                                              'divide', 'increment', 'decrement'):
@@ -444,10 +538,67 @@ class Parser:
 
     def parse_assign(self):
         target = self.parse_expr()
-        if self.accept('ASSIGN'):
+        t = self.peek().kind
+        if t == 'ASSIGN':
+            self.next()
             value = self.parse_assign()
             return ('binop', '=', target, value)
+        if t in _COMPOUND_ASSIGN:
+            self.next()
+            value = self.parse_assign()
+            return ('binop', _COMPOUND_ASSIGN[t], target, value)
         return target
+
+    def parse_do(self):
+        self.next()  # do
+        body = self.parse_stmt()
+        self.skip_nl()
+        if not (self.peek().kind == 'IDENT' and self.peek().value == 'while'):
+            raise CompilerError("Expected 'while' after do body at line "
+                                f"{self.peek().line}")
+        self.next()
+        cond = self.parse_paren_expr()
+        self.accept('SEMI')
+        return ('dowhile', body, cond)
+
+    def parse_switch(self):
+        line = self.peek().line
+        self.next()  # switch
+        cond = self.parse_paren_expr()
+        self.expect('LBRACE')
+        self.skip_nl()
+        # branches: [('case', const_expr|None, [stmt,...])]  (None = default)
+        branches = []
+        cur: Optional[Tuple[Any, list]] = None
+        while self.peek().kind not in ('RBRACE', 'EOF'):
+            self.skip_nl()
+            t = self.peek()
+            if t.kind == 'IDENT' and t.value == 'case':
+                if cur is not None:
+                    branches.append(cur)
+                self.next()
+                const = self.parse_expr()
+                self.expect('COLON')
+                cur = ('case', const, [])
+            elif t.kind == 'IDENT' and t.value == 'default':
+                if cur is not None:
+                    branches.append(cur)
+                self.next()
+                self.expect('COLON')
+                cur = ('case', None, [])
+            else:
+                if cur is None:
+                    raise CompilerError(
+                        "Statement before first case in switch at line "
+                        f"{t.line}")
+                cur[2].append(self.parse_stmt())
+            self.skip_nl()
+        if cur is not None:
+            branches.append(cur)
+        self.expect('RBRACE')
+        if not branches:
+            raise CompilerError(f"Empty switch at line {line}")
+        return ('switch', cond, branches)
 
     def parse_if(self):
         self.next()
@@ -467,8 +618,7 @@ class Parser:
         # init
         init = None
         if self.peek().kind != 'SEMI':
-            if self.peek().kind == 'IDENT' and self.peek().value in (
-                    'int', 'float', 'bool', 'string'):
+            if self._is_decl_start():
                 init = self.parse_decl(no_semi=True)
             else:
                 init = ('expr', self.parse_expr())
@@ -525,7 +675,13 @@ class Parser:
     # ---------------- 表达式 ----------------
 
     def parse_expr(self):
-        return self.parse_or()
+        e = self.parse_or()
+        if self.accept('QUESTION'):
+            a = self.parse_assign()
+            self.expect('COLON')
+            b = self.parse_assign()
+            return ('cond', e, a, b)
+        return e
 
     def parse_or(self):
         left = self.parse_and()
@@ -584,6 +740,12 @@ class Parser:
         if self.peek().kind == 'MINUS':
             self.next()
             return ('neg', self.parse_unary())
+        if self.peek().kind == 'INC':
+            self.next()
+            return ('preinc', self.parse_unary())
+        if self.peek().kind == 'DEC':
+            self.next()
+            return ('predec', self.parse_unary())
         return self.parse_postfix()
 
     def parse_postfix(self):
@@ -598,6 +760,12 @@ class Parser:
                 self.next()
                 name = self.expect('IDENT').value
                 e = ('member', e, name)
+            elif self.peek().kind == 'INC':
+                self.next()
+                e = ('postinc', e)
+            elif self.peek().kind == 'DEC':
+                self.next()
+                e = ('postdec', e)
             else:
                 break
         return e
@@ -851,6 +1019,11 @@ class CodeGen:
                         walk([s[3]])
                 elif kind == 'while':
                     walk([s[2]])
+                elif kind == 'dowhile':
+                    walk([s[1]])
+                elif kind == 'switch':
+                    for _bk, _const, stmts in s[2]:
+                        walk(stmts)
                 elif kind == 'for':
                     if s[1] is not None and s[1][0] == 'decl':
                         for name, t, _i, _a in s[1][1]:
@@ -960,6 +1133,10 @@ class CodeGen:
             self.gen_while(s[1], s[2])
         elif kind == 'for':
             self.gen_for(s[1], s[2], s[3], s[4])
+        elif kind == 'dowhile':
+            self.gen_dowhile(s[1], s[2])
+        elif kind == 'switch':
+            self.gen_switch(s[1], s[2])
         elif kind == 'break':
             if not self.break_labels:
                 raise CompilerError("break outside loop")
@@ -1019,6 +1196,66 @@ class CodeGen:
         self.break_labels.pop()
         self.continue_labels.pop()
         self.label(l_end)
+
+    def gen_dowhile(self, body, cond) -> None:
+        l_body = self.new_label('dbody')
+        l_cond = self.new_label('dcond')
+        l_end = self.new_label('dend')
+        self.label(l_body)
+        self.break_labels.append(l_end)
+        self.continue_labels.append(l_cond)
+        self.gen_stmt(body)
+        self.label(l_cond)
+        self.gen_cond_jump_false(cond, l_end)
+        self.emit('JMP', self.lab(l_body))
+        self.break_labels.pop()
+        self.continue_labels.pop()
+        self.label(l_end)
+
+    def gen_switch(self, cond, branches) -> None:
+        """switch: 选择器压栈, CMP 链分派, case 体按文字顺序内联 (C 贯穿语义)。"""
+        sel_t = self._expr_type(cond)
+        if sel_t not in ('int', 'bool'):
+            raise CompilerError(
+                f"Switch expression must be integer, got: {sel_t}")
+        l_end = self.new_label('swend')
+        self.break_labels.append(l_end)
+        self.gen_value(cond)
+        self.emit('PUSH', self.reg(0))                 # [SP] = selector
+
+        labels: List[Tuple[Optional[int], str]] = []
+        default_lbl: Optional[str] = None
+        for _kind, const, _stmts in branches:
+            if const is None:
+                lbl = self.new_label('swdef')
+                default_lbl = lbl
+                labels.append((None, lbl))
+                continue
+            ctype, raw = self._const_value(const)
+            if ctype not in ('int', 'bool'):
+                raise CompilerError(
+                    f"case value must be an integer constant, got: {ctype}")
+            labels.append((raw & 0xFFFFFFFFFFFFFFFF, self.new_label('swcase')))
+
+        # 分派比较链
+        for raw, lbl in labels:
+            if raw is None:
+                continue
+            self.emit('LD', self.reg(0), ('mem', 32, 0))
+            self.emit('MOV', self.reg(1), self.imm(raw))
+            self.emit('CMP', self.reg(0), self.reg(1))
+            self.emit('B', self.lab(lbl), ('cond', 'EQ'))
+        self.emit('JMP', self.lab(default_lbl if default_lbl is not None
+                                  else l_end))
+
+        # case/default 体 (inline, 贯穿)
+        for idx, (_kind, _const, stmts) in enumerate(branches):
+            self.label(labels[idx][1])
+            self.gen_stmts(stmts)
+
+        self.label(l_end)
+        self.break_labels.pop()
+        self.emit('ADDI', self.reg(32), self.reg(32), self.imm(8))  # 丢 selector
 
     def gen_decl(self, decls) -> None:
         for name, t, init, array_lit in decls:
@@ -1197,6 +1434,10 @@ class CodeGen:
             t = self.gen_value(node[1])
             self.emit('XORI', self.reg(0), self.reg(0), self.imm(1))
             return 'bool'
+        if kind in ('preinc', 'predec', 'postinc', 'postdec'):
+            return self._gen_incdec(kind, node[1])
+        if kind == 'cond':
+            return self._gen_ternary(node[1], node[2], node[3])
         if kind == 'binop':
             return self._gen_binop(node[1], node[2], node[3])
         raise CompilerError(f"Cannot generate code for expression: {kind}")
@@ -1354,6 +1595,8 @@ class CodeGen:
         if kind == 'str':
             return 'string'
         if kind == 'binop':
+            if node[1] in ('+=', '-=', '*=', '/=', '%='):
+                return self._expr_type(node[2])
             if node[1] in ('+', '-', '*', '%'):
                 lt = self._expr_type(node[2])
                 rt = self._expr_type(node[3])
@@ -1364,6 +1607,20 @@ class CodeGen:
                 return 'float'
             if node[1] in ('==', '!=', '<', '>', '<=', '>=', '&&', '||'):
                 return 'bool'
+        if kind == 'cond':
+            lt = self._expr_type(node[2])
+            rt = self._expr_type(node[3])
+            if (lt == 'string') != (rt == 'string'):
+                return 'int'
+            return 'string' if lt == 'string' else \
+                ('float' if lt == 'float' or rt == 'float' else 'int')
+        if kind in ('preinc', 'predec', 'postinc', 'postdec'):
+            return self._expr_type(node[1])
+        if kind == 'neg':
+            it = self._expr_type(node[1])
+            return 'float' if it == 'float' else 'int'
+        if kind == 'not':
+            return 'bool'
         return None
 
     # ---------------- 二元运算 ----------------
@@ -1371,6 +1628,8 @@ class CodeGen:
     def _gen_binop(self, op, left, right):
         if op == '=':
             return self._gen_assign(left, right)
+        if op in ('+=', '-=', '*=', '/=', '%='):
+            return self._gen_compound(left, op[0], right)
         if op == '&&' or op == '||':
             return self._gen_logical(op, left, right)
 
@@ -1444,6 +1703,104 @@ class CodeGen:
         self.label(l_end)
         return 'bool'
 
+    # ---------------- 复合赋值 / 自增自减 / 三目 ----------------
+
+    def _gen_compound(self, target, op: str, value_node) -> Any:
+        """target op= value (op ∈ + - * / %); 左值地址只求值一次。"""
+        tt = self._expr_type(target)
+        if tt not in ('int', 'bool', 'float'):
+            raise CompilerError(f"Cannot apply '{op}=' to type: {tt}")
+        if tt == 'float' and op == '%':
+            raise CompilerError("Float modulo not supported")
+        float_mode = tt == 'float'
+
+        self._gen_lvalue_addr(target)
+        self.emit('PUSH', self.reg(0))                 # [SP] = addr
+        vt = self.gen_value(value_node)                # x0 = rhs
+        self._convert(vt, tt)
+        self.emit('MOV', self.reg(1), self.reg(0))     # b = rhs
+        self.emit('LD', self.reg(2), ('mem', 32, 0))   # x2 = addr
+        self.emit('LD', self.reg(0), ('mem', 2, 0))    # a = old
+
+        if float_mode:
+            fmap = {'+': Syscall.FADD, '-': Syscall.FSUB,
+                    '*': Syscall.FMUL, '/': Syscall.FDIV}
+            self.emit('SYS', self.imm(fmap[op]))
+        elif op == '+':
+            self.emit('ADD', self.reg(0), self.reg(1))
+        elif op == '-':
+            self.emit('SUB', self.reg(0), self.reg(1))
+        elif op == '*':
+            self.emit('MUL', self.reg(0), self.reg(1))
+        elif op == '/':
+            self.emit('DIV', self.reg(0), self.reg(1))
+        else:  # %
+            self.emit('MOV', self.reg(3), self.reg(1))  # 除数备份
+            self.emit('PUSH', self.reg(0))
+            self.emit('DIV', self.reg(0), self.reg(3))
+            self.emit('MUL', self.reg(0), self.reg(3))
+            self.emit('MOV', self.reg(1), self.reg(0))
+            self.emit('POP', self.reg(0))
+            self.emit('SUB', self.reg(0), self.reg(1))
+
+        self.emit('SD', self.reg(0), ('mem', 2, 0))
+        self.emit('ADDI', self.reg(32), self.reg(32), self.imm(8))
+        return tt
+
+    def _gen_incdec(self, kind: str, target) -> Any:
+        """++/-- (前缀与后缀); 后缀返回旧值, 前缀返回新值。"""
+        tt = self._expr_type(target)
+        if tt not in ('int', 'bool', 'float'):
+            raise CompilerError(f"Cannot {kind} value of type: {tt}")
+        op = '+' if 'inc' in kind else '-'
+        postfix = kind.startswith('post')
+        float_mode = tt == 'float'
+
+        self._gen_lvalue_addr(target)
+        self.emit('PUSH', self.reg(0))                 # [SP] = addr
+        self.emit('LD', self.reg(2), ('mem', 32, 0))   # x2 = addr
+        self.emit('LD', self.reg(0), ('mem', 2, 0))    # a = old
+        if postfix:
+            self.emit('MOV', self.reg(5), self.reg(0))  # 保存旧值
+        if float_mode:
+            self.emit('MOV', self.reg(0), self.imm(1))
+            self.emit('SYS', self.imm(Syscall.ITOF))    # b = 1.0
+            self.emit('MOV', self.reg(1), self.reg(0))
+            self.emit('LD', self.reg(0), ('mem', 2, 0))  # a 回填
+            self.emit('SYS', self.imm(Syscall.FADD if op == '+'
+                                       else Syscall.FSUB))
+        else:
+            self.emit('MOV', self.reg(1), self.imm(1))
+            self.emit('ADD' if op == '+' else 'SUB',
+                      self.reg(0), self.reg(1))
+        self.emit('SD', self.reg(0), ('mem', 2, 0))
+        self.emit('ADDI', self.reg(32), self.reg(32), self.imm(8))
+        if postfix:
+            self.emit('MOV', self.reg(0), self.reg(5))
+        return tt
+
+    def _gen_ternary(self, cond, a, b) -> Any:
+        lt = self._expr_type(a)
+        rt = self._expr_type(b)
+        if (lt == 'string') != (rt == 'string'):
+            raise CompilerError("Cannot mix string and numeric in '?:'")
+        tt = 'string' if lt == 'string' else \
+            ('float' if (lt == 'float' or rt == 'float') else 'int')
+        l_false = self.new_label('cndf')
+        l_end = self.new_label('cnde')
+        self.gen_cond_jump_false(cond, l_false)
+        t1 = self.gen_value(a)
+        self._convert(t1, tt)
+        self.emit('MOV', self.reg(6), self.reg(0))
+        self.emit('JMP', self.lab(l_end))
+        self.label(l_false)
+        t2 = self.gen_value(b)
+        self._convert(t2, tt)
+        self.emit('MOV', self.reg(6), self.reg(0))
+        self.label(l_end)
+        self.emit('MOV', self.reg(0), self.reg(6))
+        return tt
+
     # ---------------- 字符串化 (print/concat) ----------------
 
     def _gen_string_value(self, node) -> None:
@@ -1479,7 +1836,8 @@ class CodeGen:
             return 'float'
         if name in ('strlen', 'strcmp', 'rand', 'time', 'abs', 'input'):
             return 'int'
-        if name in ('strcpy',):
+        if name in ('strcpy', 'int_to_str', 'itoa', 'float_to_str', 'ftoa',
+                    'bool_to_str'):
             return 'string'
         return None
 
@@ -1539,6 +1897,20 @@ class CodeGen:
             self.gen_value(args[0])
             self.emit('SYS', self.imm(Syscall.SRAND))
             return 'void'
+        if name in ('int_to_str', 'itoa'):
+            self.gen_value(args[0])
+            self.emit('SYS', self.imm(Syscall.ITOA))
+            return 'string'
+        if name in ('float_to_str', 'ftoa'):
+            t = self.gen_value(args[0])
+            if t in ('int', 'bool'):
+                self.emit('SYS', self.imm(Syscall.ITOF))
+            self.emit('SYS', self.imm(Syscall.FTOA))
+            return 'string'
+        if name in ('bool_to_str',):
+            self.gen_value(args[0])
+            self.emit('SYS', self.imm(Syscall.BOOL_STR))
+            return 'string'
         if name == 'time':
             self.emit('SYS', self.imm(Syscall.TIME))
             return 'int'
